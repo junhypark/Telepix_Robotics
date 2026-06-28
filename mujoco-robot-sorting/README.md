@@ -13,6 +13,9 @@ MuJoCo 기반 로봇 팔이 RGB-D 카메라 입력을 사용해 테이블 위 �
 | 3D perception | camera calibration, depth processor, point cloud, pose estimator |
 | grasp planning | top-down grasp pose generator |
 | collision-aware planning | waypoint trajectory planner + base cylinder collision checker |
+| dynamic bin detection | seed-generated blue/red bins detected through RGB-D vision |
+| in-bin placement | non-overlapping detected-bin placement slots |
+| table safety | shoulder/elbow/wrist/end-effector link clearance checks |
 | 0.5초 SLA | inspection response 이후 task/trajectory/command queue latency 측정 |
 | Docker 통신 | `inspection-api`와 `sim`이 bridge network로 HTTP 통신 |
 | 테스트 | unit, API, integration, safety, latency tests |
@@ -168,3 +171,7 @@ Pixel-depth-to-world 변환은 pinhole camera model과 top-down workspace calibr
 MuJoCo depth rendering은 실행 환경의 OpenGL/OSMesa 상태에 따라 달라질 수 있어 deterministic fallback을 제공합니다.
 
 0.5초 SLA는 inspection response 이후 task, trajectory, command queue까지의 software latency입니다. 실제 로봇 팔 이동 완료 시간은 포함하지 않습니다.
+
+Bin 좌표는 고정 config 좌표가 아니라 seed 기반으로 생성된 blue/red bin을 RGB-D/vision으로 감지해 사용합니다. 정상 제품은 blue `normal_bin`, 불량 제품은 red `defect_bin` 안의 비어 있는 slot으로 배치되며, 같은 bin 안의 이전 배치물과 겹치지 않도록 `placed_objects.json`에 state를 남깁니다.
+
+로봇팔 이동은 end-effector뿐 아니라 shoulder, elbow, wrist와 link segment 샘플이 table safety height 아래로 내려가지 않는지 검사합니다. 실패 시 `link_table_penetration_risk`가 result log와 summary에 기록됩니다.
