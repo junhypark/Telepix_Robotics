@@ -112,6 +112,8 @@ class RobotCommand(StrictBaseModel):
     inspection_at: float | None = None
     command_latency_seconds: float = Field(default=0.0, ge=0.0)
     trajectory: PlannedTrajectory | None = None
+    object_pose: ObjectPose3D | None = None
+    grasp_pose: GraspPose | None = None
 
 
 class JointAngles(StrictBaseModel):

@@ -23,15 +23,32 @@ RESULT_LOG_FIELDS = [
     "pick_x",
     "pick_y",
     "pick_z",
+    "object_x",
+    "object_y",
+    "object_z",
+    "object_roll",
+    "object_pitch",
+    "object_yaw",
+    "grasp_x",
+    "grasp_y",
+    "grasp_z",
+    "pre_grasp_x",
+    "pre_grasp_y",
+    "pre_grasp_z",
+    "retreat_x",
+    "retreat_y",
+    "retreat_z",
     "place_x",
     "place_y",
     "place_z",
     "target_bin",
     "status",
     "failure_reason",
+    "trajectory_safe",
+    "collision_checked",
+    "workspace_checked",
     "command_latency_seconds",
     "self_collision_checked",
-    "workspace_checked",
 ]
 
 
@@ -73,10 +90,20 @@ class ResultLogger:
         results: list[TaskExecutionResult],
         *,
         min_confidence: float,
+        rgbd_used: bool = False,
+        depth_fallback_used: bool = False,
+        ground_truth_fallback_used: bool = False,
     ) -> Path:
         """Write aggregate run summary to JSON."""
 
-        summary = self.build_summary(detections, results, min_confidence=min_confidence)
+        summary = self.build_summary(
+            detections,
+            results,
+            min_confidence=min_confidence,
+            rgbd_used=rgbd_used,
+            depth_fallback_used=depth_fallback_used,
+            ground_truth_fallback_used=ground_truth_fallback_used,
+        )
         path = self.output_dir / "summary.json"
         self._write_json(path, summary)
         return path
@@ -88,13 +115,23 @@ class ResultLogger:
         results: list[TaskExecutionResult],
         *,
         min_confidence: float,
+        rgbd_used: bool = False,
+        depth_fallback_used: bool = False,
+        ground_truth_fallback_used: bool = False,
     ) -> RunSummary:
         """Write every required output file and return the summary."""
 
         self.write_detected_objects(detections)
         self.write_planned_tasks(tasks)
         self.write_result_log(results)
-        summary = self.build_summary(detections, results, min_confidence=min_confidence)
+        summary = self.build_summary(
+            detections,
+            results,
+            min_confidence=min_confidence,
+            rgbd_used=rgbd_used,
+            depth_fallback_used=depth_fallback_used,
+            ground_truth_fallback_used=ground_truth_fallback_used,
+        )
         self._write_json(self.output_dir / "summary.json", summary)
         return summary
 
@@ -104,6 +141,9 @@ class ResultLogger:
         results: list[TaskExecutionResult],
         *,
         min_confidence: float,
+        rgbd_used: bool = False,
+        depth_fallback_used: bool = False,
+        ground_truth_fallback_used: bool = False,
     ) -> RunSummary:
         """Build an aggregate run summary."""
 
@@ -111,6 +151,8 @@ class ResultLogger:
         placed_count = sum(1 for result in results if result.status == "completed")
         failed_count = sum(1 for result in results if result.status == "failed")
         total_objects = len(detections)
+        pose_success = sum(1 for result in results if result.object_pose is not None)
+        grasp_success = sum(1 for result in results if result.grasp_pose is not None)
         return RunSummary(
             total_objects=total_objects,
             normal_count=sum(1 for item in detections if item.label == "normal"),
@@ -123,27 +165,61 @@ class ResultLogger:
             self_collision_failures=sum(1 for item in results if item.failure_reason == "self_collision_risk"),
             workspace_failures=sum(1 for item in results if item.failure_reason == "workspace_limit"),
             vision_low_confidence_count=sum(1 for item in detections if item.confidence < min_confidence),
+            rgbd_used=rgbd_used,
+            depth_fallback_used=depth_fallback_used,
+            ground_truth_fallback_used=ground_truth_fallback_used,
+            pose_estimation_success_count=pose_success,
+            pose_estimation_failure_count=max(0, total_objects - pose_success) if rgbd_used else 0,
+            grasp_generation_success_count=grasp_success,
+            grasp_generation_failure_count=max(0, total_objects - grasp_success) if rgbd_used else 0,
+            trajectory_collision_failures=sum(
+                1 for item in results if item.failure_reason == "trajectory_collision_risk"
+            ),
         )
 
     @staticmethod
     def _result_row(result: TaskExecutionResult) -> dict[str, Any]:
         pick_x, pick_y, pick_z = result.pick_position
         place_x, place_y, place_z = result.place_position
+        object_position = result.object_pose.position if result.object_pose is not None else result.pick_position
+        object_orientation = (
+            result.object_pose.orientation_rpy if result.object_pose is not None else (0.0, 0.0, 0.0)
+        )
+        grasp_position = result.grasp_pose.grasp_position if result.grasp_pose is not None else result.pick_position
+        pre_grasp = result.grasp_pose.pre_grasp_position if result.grasp_pose is not None else result.pick_position
+        retreat = result.grasp_pose.retreat_position if result.grasp_pose is not None else result.pick_position
         return {
             "object_id": result.object_id,
             "label": result.label,
             "pick_x": pick_x,
             "pick_y": pick_y,
             "pick_z": pick_z,
+            "object_x": object_position[0],
+            "object_y": object_position[1],
+            "object_z": object_position[2],
+            "object_roll": object_orientation[0],
+            "object_pitch": object_orientation[1],
+            "object_yaw": object_orientation[2],
+            "grasp_x": grasp_position[0],
+            "grasp_y": grasp_position[1],
+            "grasp_z": grasp_position[2],
+            "pre_grasp_x": pre_grasp[0],
+            "pre_grasp_y": pre_grasp[1],
+            "pre_grasp_z": pre_grasp[2],
+            "retreat_x": retreat[0],
+            "retreat_y": retreat[1],
+            "retreat_z": retreat[2],
             "place_x": place_x,
             "place_y": place_y,
             "place_z": place_z,
             "target_bin": result.target_bin,
             "status": result.status,
             "failure_reason": result.failure_reason,
+            "trajectory_safe": result.trajectory_safe,
+            "collision_checked": result.collision_checked,
+            "workspace_checked": result.workspace_checked,
             "command_latency_seconds": result.command_latency_seconds,
             "self_collision_checked": result.self_collision_checked,
-            "workspace_checked": result.workspace_checked,
         }
 
     @staticmethod

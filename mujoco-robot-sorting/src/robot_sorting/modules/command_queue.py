@@ -5,13 +5,21 @@ from __future__ import annotations
 import time
 from collections import deque
 
-from robot_sorting.schemas import PickPlaceTask, RobotCommand
+from robot_sorting.schemas import GraspPose, ObjectPose3D, PickPlaceTask, PlannedTrajectory, RobotCommand
 
 
-def create_robot_commands(tasks: list[PickPlaceTask]) -> list[RobotCommand]:
+def create_robot_commands(
+    tasks: list[PickPlaceTask],
+    trajectories: dict[str, PlannedTrajectory] | None = None,
+    object_poses: dict[str, ObjectPose3D] | None = None,
+    grasp_poses: dict[str, GraspPose] | None = None,
+) -> list[RobotCommand]:
     """Create robot commands from planned tasks."""
 
     commands: list[RobotCommand] = []
+    trajectory_map = trajectories or {}
+    object_pose_map = object_poses or {}
+    grasp_pose_map = grasp_poses or {}
     for task in tasks:
         queued_at = time.perf_counter()
         inspection_at = task.inspection_at
@@ -25,6 +33,9 @@ def create_robot_commands(tasks: list[PickPlaceTask]) -> list[RobotCommand]:
                 queued_at=queued_at,
                 inspection_at=inspection_at,
                 command_latency_seconds=latency,
+                trajectory=trajectory_map.get(task.object_id),
+                object_pose=object_pose_map.get(task.object_id),
+                grasp_pose=grasp_pose_map.get(task.object_id),
             )
         )
     return commands
@@ -50,4 +61,3 @@ class RobotCommandQueue:
 
     def __len__(self) -> int:
         return len(self._queue)
-

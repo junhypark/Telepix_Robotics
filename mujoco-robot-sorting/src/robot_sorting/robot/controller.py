@@ -13,7 +13,7 @@ from robot_sorting.robot.safety import (
     is_inside_workspace,
     sample_line_segment,
 )
-from robot_sorting.schemas import RobotCommand, SimulationConfig, TaskExecutionResult
+from robot_sorting.schemas import RobotCommand, SimulationConfig, TaskExecutionResult, TrajectoryWaypoint
 from robot_sorting.simulation.mujoco_env import MujocoSortingEnv
 
 LOGGER = logging.getLogger(__name__)
@@ -80,18 +80,10 @@ class RobotController:
         workspace_checked = True
         self_collision_checked = True
         try:
-            self._validate_task_workspace(command)
-            self._validate_task_self_collision(command)
-            above_pick = self._above(task.pick_position)
-            above_place = self._above(task.place_position)
-            self.move_end_effector_to(above_pick)
-            self.move_end_effector_to(task.pick_position)
-            self.env.attach_nearest_object(task.pick_position, preferred_object_id=command.object_id)
-            self.move_end_effector_to(above_pick)
-            self.move_end_effector_to(above_place)
-            self.move_end_effector_to(task.place_position)
-            self.env.release_attached_object(task.place_position)
-            self.move_end_effector_to(above_place)
+            if command.trajectory is not None:
+                self._execute_planned_trajectory(command)
+            else:
+                self._execute_legacy_pick_place(command)
             status = "completed"
             failure_reason = ""
         except UnsafeMotionError as exc:
@@ -109,6 +101,10 @@ class RobotController:
             command_latency_seconds=command.command_latency_seconds,
             self_collision_checked=self_collision_checked,
             workspace_checked=workspace_checked,
+            object_pose=command.object_pose,
+            grasp_pose=command.grasp_pose,
+            trajectory_safe=command.trajectory.is_safe if command.trajectory is not None else None,
+            collision_checked=command.trajectory is not None,
         )
 
     def execute_commands(self, commands: list[RobotCommand]) -> list[TaskExecutionResult]:
@@ -126,6 +122,36 @@ class RobotController:
         for point in task_points:
             if not is_inside_workspace(point, self.config.workspace):
                 raise UnsafeMotionError("workspace_limit")
+
+    def _execute_legacy_pick_place(self, command: RobotCommand) -> None:
+        task = command.task
+        self._validate_task_workspace(command)
+        self._validate_task_self_collision(command)
+        above_pick = self._above(task.pick_position)
+        above_place = self._above(task.place_position)
+        self.move_end_effector_to(above_pick)
+        self.move_end_effector_to(task.pick_position)
+        self.env.attach_nearest_object(task.pick_position, preferred_object_id=command.object_id)
+        self.move_end_effector_to(above_pick)
+        self.move_end_effector_to(above_place)
+        self.move_end_effector_to(task.place_position)
+        self.env.release_attached_object(task.place_position)
+        self.move_end_effector_to(above_place)
+
+    def _execute_planned_trajectory(self, command: RobotCommand) -> None:
+        trajectory = command.trajectory
+        if trajectory is None:
+            return
+        if not trajectory.is_safe:
+            raise UnsafeMotionError(trajectory.failure_reason or "trajectory_collision_risk")
+        previous: TrajectoryWaypoint | None = None
+        for waypoint in trajectory.waypoints:
+            self.move_end_effector_to(waypoint.position)
+            if previous is not None and previous.gripper_state == "open" and waypoint.gripper_state == "closed":
+                self.env.attach_nearest_object(waypoint.position, preferred_object_id=command.object_id)
+            if previous is not None and previous.gripper_state == "closed" and waypoint.gripper_state == "open":
+                self.env.release_attached_object(waypoint.position)
+            previous = waypoint
 
     def _validate_task_self_collision(self, command: RobotCommand) -> None:
         points = [

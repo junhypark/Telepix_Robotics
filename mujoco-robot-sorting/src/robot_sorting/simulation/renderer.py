@@ -25,6 +25,7 @@ class MujocoRenderer:
 
     def __init__(self, env: MujocoSortingEnv) -> None:
         self.env = env
+        self.depth_fallback_used = False
 
     def render_rgb(self) -> np.ndarray | None:
         """Render one RGB image, or return None when rendering is unavailable."""
@@ -79,7 +80,9 @@ class MujocoRenderer:
             return None
         depth = self.render_depth()
         if depth is None:
+            self.depth_fallback_used = True
             return self.render_ground_truth_rgbd(rgb=rgb)
+        self.depth_fallback_used = False
         return RGBDFrame(
             rgb=rgb,
             depth=depth,
