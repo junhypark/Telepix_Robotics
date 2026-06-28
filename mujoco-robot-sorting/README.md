@@ -31,6 +31,31 @@ uv run mypy src
 uv run robot-sort run --headless --objects 5 --seed 42 --output outputs/run
 ```
 
+사용한 로봇 모델은 외부에서 가져온 UR5/Panda 등 상용 로봇 asset이 아니라, 프로젝트 내부 `SceneBuilder`가 생성하는 custom educational MuJoCo MJCF arm입니다. 제어 모델은 yaw/shoulder/elbow 3-DOF 분석 IK를 사용하고, viewer에는 shoulder/elbow/wrist joint와 two-finger gripper가 보이도록 시각 geometry를 구성했습니다. Grasp는 테스트 안정성을 위해 suction-style logical attachment로 처리합니다.
+
+## 생산 시나리오
+
+기본 실행은 seed 기반 랜덤 batch를 만들지만, 실제 현장에서 발생할 수 있는 deterministic scenario catalog도 제공합니다.
+
+```powershell
+uv run robot-sort list-scenarios
+uv run robot-sort run --headless --scenario balanced_conveyor_batch --output outputs/scenarios/balanced_conveyor_batch
+uv run robot-sort run-scenarios --output outputs/scenario-check --no-save-images
+```
+
+현재 제공 시나리오:
+
+```text
+balanced_conveyor_batch       정상/불량 균형 혼합 생산 배치
+high_defect_rework_batch      공정 이상 후 불량 편중 재작업 배치
+normal_heavy_end_of_shift     라인 안정화 후 정상 편중 마감 배치
+crowded_pick_zone_batch       pick zone 제품 간격이 좁은 밀집 배치
+bin_changeover_shift          작업자 bin 위치 변경 후 동적 bin 감지 배치
+small_batch_single_defect     소량 샘플 중 단일 불량 분리 배치
+```
+
+`run-scenarios`는 모든 시나리오를 실행하고 각 scenario의 `placed_count == total_objects`, `failed_count == 0` 조건을 만족하지 못하면 실패합니다.
+
 외부 FastAPI 서버를 로컬에서 따로 띄워서 HTTP 통신까지 확인하려면:
 
 ```powershell
