@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import math
 
 import numpy as np
@@ -165,7 +164,7 @@ def _candidate_positions(
     ys = _grid_axis(min_y, max_y, config.grid_resolution_meters)
     z = center_z
     candidates = [(x, y, z) for x in xs for y in ys]
-    return sorted(candidates, key=lambda item: (math.hypot(item[0] - center_x, item[1] - center_y), item[0], item[1]))
+    return sorted(candidates, key=lambda item: (item[0], item[1], math.hypot(item[0] - center_x, item[1] - center_y)))
 
 
 def _grid_axis(start: float, end: float, resolution: float) -> list[float]:
@@ -183,8 +182,7 @@ def _deterministic_order(
     candidates: list[tuple[float, float, float]],
     object_id: str,
 ) -> list[tuple[float, float, float]]:
+    del object_id
     if not candidates:
         return []
-    digest = hashlib.sha256(object_id.encode("utf-8")).digest()
-    offset = int.from_bytes(digest[:4], "big") % len(candidates)
-    return [*candidates[offset:], *candidates[:offset]]
+    return candidates

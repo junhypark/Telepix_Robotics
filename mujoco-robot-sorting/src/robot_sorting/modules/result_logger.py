@@ -107,6 +107,7 @@ class ResultLogger:
         rgbd_used: bool = False,
         depth_fallback_used: bool = False,
         ground_truth_fallback_used: bool = False,
+        conveyor_metrics: dict[str, Any] | None = None,
     ) -> Path:
         """Write aggregate run summary to JSON."""
 
@@ -117,6 +118,7 @@ class ResultLogger:
             rgbd_used=rgbd_used,
             depth_fallback_used=depth_fallback_used,
             ground_truth_fallback_used=ground_truth_fallback_used,
+            conveyor_metrics=conveyor_metrics,
         )
         path = self.output_dir / "summary.json"
         self._write_json(path, summary)
@@ -133,6 +135,7 @@ class ResultLogger:
         depth_fallback_used: bool = False,
         ground_truth_fallback_used: bool = False,
         placed_objects: list[PlacedObjectRecord] | None = None,
+        conveyor_metrics: dict[str, Any] | None = None,
     ) -> RunSummary:
         """Write every required output file and return the summary."""
 
@@ -147,6 +150,7 @@ class ResultLogger:
             rgbd_used=rgbd_used,
             depth_fallback_used=depth_fallback_used,
             ground_truth_fallback_used=ground_truth_fallback_used,
+            conveyor_metrics=conveyor_metrics,
         )
         self._write_json(self.output_dir / "summary.json", summary)
         return summary
@@ -160,6 +164,7 @@ class ResultLogger:
         rgbd_used: bool = False,
         depth_fallback_used: bool = False,
         ground_truth_fallback_used: bool = False,
+        conveyor_metrics: dict[str, Any] | None = None,
     ) -> RunSummary:
         """Build an aggregate run summary."""
 
@@ -169,7 +174,7 @@ class ResultLogger:
         total_objects = len(detections)
         pose_success = sum(1 for result in results if result.object_pose is not None)
         grasp_success = sum(1 for result in results if result.grasp_pose is not None)
-        return RunSummary(
+        summary = RunSummary(
             total_objects=total_objects,
             normal_count=sum(1 for item in detections if item.label == "normal"),
             defect_count=sum(1 for item in detections if item.label == "defect"),
@@ -203,6 +208,11 @@ class ResultLogger:
                 default=0.0,
             ),
         )
+        if not conveyor_metrics:
+            return summary
+        data = summary.model_dump()
+        data.update(conveyor_metrics)
+        return RunSummary(**data)
 
     @staticmethod
     def _result_row(result: TaskExecutionResult) -> dict[str, Any]:

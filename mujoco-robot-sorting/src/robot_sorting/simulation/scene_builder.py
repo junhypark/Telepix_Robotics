@@ -45,6 +45,7 @@ class SceneBuilder:
         """Return a complete MuJoCo XML model."""
 
         object_xml = "\n".join(self._object_body_xml(obj) for obj in self.objects)
+        conveyor_xml = self._conveyor_xml() if self.config.conveyor_enabled else ""
         normal_bin = self._bin_by_label("normal_bin")
         defect_bin = self._bin_by_label("defect_bin")
         normal_bin_pos = self._format_xyz(normal_bin.position)
@@ -78,6 +79,11 @@ class SceneBuilder:
     <material name="mat_defect" rgba="0.95 0.05 0.03 1"/>
     <material name="mat_normal_bin" rgba="0.02 0.18 0.95 1"/>
     <material name="mat_defect_bin" rgba="0.95 0.03 0.03 1"/>
+    <material name="mat_conveyor" rgba="0.10 0.11 0.12 1"/>
+    <material name="mat_conveyor_guide" rgba="0.58 0.62 0.66 1"/>
+    <material name="mat_entry_marker" rgba="0.10 0.70 0.95 0.45"/>
+    <material name="mat_inspection_marker" rgba="0.95 0.85 0.05 0.45"/>
+    <material name="mat_pick_marker" rgba="0.10 0.95 0.35 0.45"/>
   </asset>
 
   <worldbody>
@@ -87,6 +93,8 @@ class SceneBuilder:
     <body name="table" pos="0.16 0 {self.config.table_height / 2:.6f}">
       <geom name="table_geom" type="box" size="0.72 0.48 {self.config.table_height / 2:.6f}" material="mat_table"/>
     </body>
+
+    {conveyor_xml}
 
     <body name="normal_bin" pos="{normal_bin_pos}">
       <geom name="normal_bin_geom" type="box" size="{bin_half_size}" material="mat_normal_bin"/>
@@ -165,6 +173,9 @@ class SceneBuilder:
 
     <camera name="{escape(self.config.renderer_camera)}" mode="fixed" pos="0.12 0 1.05"
             xyaxes="1 0 0 0 1 0" fovy="45"/>
+    <camera name="inspection_camera" mode="fixed"
+            pos="{self.config.inspection_zone_center[0]:.6f} {self.config.inspection_zone_center[1]:.6f} 0.82"
+            xyaxes="1 0 0 0 1 0" fovy="38"/>
   </worldbody>
 
   <actuator>
@@ -178,6 +189,8 @@ class SceneBuilder:
     def _generate_objects(self) -> list[SceneObject]:
         if self.config.object_spawn_positions is not None:
             return self._generate_configured_objects()
+        if self.config.conveyor_enabled:
+            return self._generate_conveyor_objects()
 
         rng = np.random.default_rng(self.config.seed)
         objects: list[SceneObject] = []
@@ -213,6 +226,34 @@ class SceneBuilder:
 
         if len(objects) != self.config.objects:
             raise ValueError("Could not place deterministic objects inside the safe workspace")
+        return objects
+
+    def _generate_conveyor_objects(self) -> list[SceneObject]:
+        objects: list[SceneObject] = []
+        entry_x, entry_y, entry_z = self.config.conveyor_entry_position
+        spacing = max(self.config.object_radius * 3.0, 0.075)
+        for index in range(self.config.objects):
+            row = index // 8
+            column = index % 8
+            x = max(self.config.workspace.x_min + 0.04, entry_x - column * spacing)
+            y = entry_y + row * spacing
+            position = (x, y, entry_z)
+            if not is_inside_workspace(position, self.config.workspace):
+                position = (
+                    min(max(x, self.config.workspace.x_min + 0.04), self.config.workspace.x_max - 0.04),
+                    min(max(y, self.config.workspace.y_min + 0.04), self.config.workspace.y_max - 0.04),
+                    entry_z,
+                )
+            label = self._label_for_index(index)
+            color = (0.05, 0.20, 0.95, 1.0) if label == "normal" else (0.95, 0.05, 0.03, 1.0)
+            objects.append(
+                SceneObject(
+                    object_id=f"object_{index}",
+                    label=label,
+                    position=position,
+                    color=color,
+                )
+            )
         return objects
 
     def _generate_configured_objects(self) -> list[SceneObject]:
@@ -293,6 +334,39 @@ class SceneBuilder:
       <geom name="{escape(obj.object_id)}_geom" type="box"
             size="{self.config.object_radius:.6f} {self.config.object_radius:.6f} {self.config.object_half_height:.6f}"
             material="{material}"/>
+    </body>
+""".rstrip()
+
+    def _conveyor_xml(self) -> str:
+        entry = self.config.conveyor_entry_position
+        inspection = self.config.inspection_zone_center
+        pick = self.config.pick_zone_center
+        center_x = (entry[0] + inspection[0]) / 2.0
+        center_y = (entry[1] + inspection[1]) / 2.0
+        length = max(abs(inspection[0] - entry[0]) + 0.34, 0.45)
+        width = 0.13
+        belt_z = self.config.table_height + 0.004
+        guide_z = self.config.table_height + 0.026
+        return f"""
+    <body name="conveyor_belt" pos="{center_x:.6f} {center_y:.6f} {belt_z:.6f}">
+      <geom name="conveyor_belt_geom" type="box" size="{length / 2.0:.6f} {width / 2.0:.6f} 0.004000"
+            material="mat_conveyor"/>
+      <geom name="conveyor_left_guide_geom" type="box" pos="0 {width / 2.0 + 0.012:.6f} {guide_z - belt_z:.6f}"
+            size="{length / 2.0:.6f} 0.006000 0.018000" material="mat_conveyor_guide"/>
+      <geom name="conveyor_right_guide_geom" type="box" pos="0 {-width / 2.0 - 0.012:.6f} {guide_z - belt_z:.6f}"
+            size="{length / 2.0:.6f} 0.006000 0.018000" material="mat_conveyor_guide"/>
+    </body>
+    <body name="conveyor_entry_marker" pos="{entry[0]:.6f} {entry[1]:.6f} {belt_z + 0.004:.6f}">
+      <geom name="conveyor_entry_marker_geom" type="box" size="0.018000 0.055000 0.002000"
+            material="mat_entry_marker"/>
+    </body>
+    <body name="inspection_zone_marker" pos="{inspection[0]:.6f} {inspection[1]:.6f} {belt_z + 0.006:.6f}">
+      <geom name="inspection_zone_marker_geom" type="box" size="0.026000 0.060000 0.002000"
+            material="mat_inspection_marker"/>
+    </body>
+    <body name="pick_zone_marker" pos="{pick[0]:.6f} {pick[1]:.6f} {belt_z + 0.008:.6f}">
+      <geom name="pick_zone_marker_geom" type="box" size="0.020000 0.052000 0.002000"
+            material="mat_pick_marker"/>
     </body>
 """.rstrip()
 

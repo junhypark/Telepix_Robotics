@@ -95,6 +95,16 @@ class SimulationConfig(StrictBaseModel):
     low_saturation_threshold: int = 75
     renderer_camera: str = "top_camera"
     control_steps_per_move: int = 20
+    conveyor_enabled: bool = False
+    conveyor_speed_mps: float = Field(default=0.05, gt=0.0)
+    conveyor_axis: Literal["x", "y"] = "x"
+    conveyor_entry_position: tuple[float, float, float] = (0.12, -0.22, 0.035)
+    inspection_zone_center: tuple[float, float, float] = (0.30, -0.22, 0.035)
+    pick_zone_center: tuple[float, float, float] = (0.30, -0.22, 0.035)
+    conveyor_zone_tolerance_meters: float = Field(default=0.03, gt=0.0)
+    dashboard_enabled: bool = True
+    dashboard_output_dir: Path | None = None
+    random_data: bool = False
 
 
 class DetectedObject(StrictBaseModel):
@@ -223,6 +233,18 @@ class RunSummary(StrictBaseModel):
     table_penetration_failures: int = 0
     min_observed_link_z: float = 0.0
     min_required_link_z: float = 0.0
+    conveyor_enabled: bool = False
+    conveyor_speed_mps: float = 0.0
+    processed_object_count: int = 0
+    conveyor_stop_count: int = 0
+    inspection_station_count: int = 0
+    pick_station_success_count: int = 0
+    pick_station_failure_count: int = 0
+    average_station_cycle_time_seconds: float = 0.0
+    max_station_cycle_time_seconds: float = 0.0
+    overhead_rotate_count: int = 0
+    level_parallel_count: int = 0
+    no_free_space_inside_bin_count: int = 0
 
 
 class ImageInspectionRequest(StrictBaseModel):
