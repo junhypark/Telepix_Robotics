@@ -200,3 +200,58 @@ MuJoCo depth rendering은 실행 환경의 OpenGL/OSMesa 상태에 따라 달라
 Bin 좌표는 고정 config 좌표가 아니라 seed 기반으로 생성된 blue/red bin을 RGB-D/vision으로 감지해 사용합니다. 정상 제품은 blue `normal_bin`, 불량 제품은 red `defect_bin` 안의 비어 있는 slot으로 배치되며, 같은 bin 안의 이전 배치물과 겹치지 않도록 `placed_objects.json`에 state를 남깁니다.
 
 로봇팔 이동은 end-effector뿐 아니라 shoulder, elbow, wrist와 link segment 샘플이 table safety height 아래로 내려가지 않는지 검사합니다. 실패 시 `link_table_penetration_risk`가 result log와 summary에 기록됩니다.
+
+## Conveyor Automation Cell and Dashboard
+
+컨베이어 기반 자동화 셀은 물리 마찰 기반 벨트가 아니라 안정적인 kinematic abstraction으로 구현되어 있습니다.
+
+```text
+object_x += conveyor_speed_mps * dt
+```
+
+검사 중과 pick 중에는 컨베이어가 정지하므로 로봇이 움직이는 물체를 집지 않습니다. 상태 전이는 `station_timeline.csv`와 `conveyor_events.json`에 기록됩니다.
+
+로컬 uv 실행:
+
+```powershell
+uv run robot-sort run --headless --objects 6 --seed 42 --random-data --enable-conveyor --enable-dashboard --output outputs/run
+uv run robot-sort dashboard --output outputs/run --host 0.0.0.0 --port 8080
+```
+
+정적 대시보드 파일만 생성:
+
+```powershell
+uv run robot-sort dashboard --output outputs/run --static
+```
+
+Docker 실행:
+
+```powershell
+docker compose build
+docker compose run --rm sim
+docker compose up dashboard
+```
+
+생성 산출물:
+
+```text
+outputs/run/station_timeline.csv
+outputs/run/conveyor_events.json
+outputs/run/dashboard_data.json
+outputs/run/report.md
+outputs/run/annotated_detection.png
+outputs/run/trajectory_preview.png
+outputs/run/dashboard/index.html
+```
+
+Dashboard API:
+
+```text
+GET /health
+GET /dashboard
+GET /api/runs/latest
+GET /api/runs/{run_id}/summary
+GET /api/runs/{run_id}/timeline
+GET /api/runs/{run_id}/objects
+GET /api/runs/{run_id}/events
+```

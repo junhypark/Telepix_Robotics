@@ -46,19 +46,32 @@ Invoke-WebRequest http://localhost:8000/health
 docker compose run --rm sim
 ```
 
-5. 특정 시나리오 실행
+5. 대시보드 서버 실행
+
+```powershell
+docker compose up dashboard
+```
+
+`service_completed_successfully`를 지원하지 않는 Docker Compose 버전이라면 아래 순서로 실행합니다.
+
+```powershell
+docker compose run --rm sim
+docker compose up dashboard
+```
+
+6. 특정 시나리오 실행
 
 ```powershell
 docker compose run --rm sim uv run robot-sort run --headless --scenario balanced_conveyor_batch --output outputs/docker-balanced
 ```
 
-6. 모든 시나리오 검증
+7. 모든 시나리오 검증
 
 ```powershell
 docker compose run --rm sim uv run robot-sort run-scenarios --output outputs/docker-scenario-check --no-save-images
 ```
 
-7. 테스트, lint, typecheck
+8. 테스트, lint, typecheck
 
 ```powershell
 docker compose run --rm test
@@ -66,7 +79,7 @@ docker compose run --rm lint
 docker compose run --rm typecheck
 ```
 
-8. 종료
+9. 종료
 
 ```powershell
 docker compose down
@@ -77,6 +90,7 @@ Compose 서비스 구조:
 ```text
 inspection-api  FastAPI inspection service, port 8000
 sim             MuJoCo sorting pipeline, INSPECTION_API_URL=http://inspection-api:8000
+dashboard       outputs/run 결과를 FastAPI dashboard로 서빙, port 8080
 test            pytest runner
 lint            ruff runner
 typecheck       mypy runner
@@ -118,6 +132,24 @@ uv run robot-sort list-scenarios
 
 ```powershell
 uv run robot-sort run --headless --scenario balanced_conveyor_batch --output outputs/local-balanced
+```
+
+컨베이어 기반 자동화 셀 실행:
+
+```powershell
+uv run robot-sort run --headless --objects 6 --seed 42 --random-data --enable-conveyor --enable-dashboard --output outputs/run
+```
+
+대시보드 실행:
+
+```powershell
+uv run robot-sort dashboard --output outputs/run --host 0.0.0.0 --port 8080
+```
+
+정적 대시보드 파일만 생성하려면:
+
+```powershell
+uv run robot-sort dashboard --output outputs/run --static
 ```
 
 전체 시나리오 검증:
@@ -193,6 +225,76 @@ uv run robot-sort view --scenario balanced_conveyor_batch --static
 | `small_batch_single_defect` | 샘플 검사처럼 소량 중 단일 불량만 분리 | 작은 배치에서 정상/불량 동시 처리 |
 
 모든 시나리오는 `placed_count == total_objects`이고 `failed_count == 0`이어야 통과합니다.
+
+## 컨베이어 기반 자동화 셀
+
+현재 기본 run은 컨베이어 기반 자동화 셀을 지원합니다.
+
+```text
+object feeder
+  -> conveyor belt
+  -> inspection station
+  -> robot pick zone
+  -> detected blue/red bins
+  -> non-overlapping placement inside bins
+```
+
+본 프로젝트의 컨베이어는 안정적인 시뮬레이션을 위해 물리 마찰 기반 벨트가 아니라 kinematic conveyor abstraction으로 구현했습니다.
+
+```text
+object_x += conveyor_speed_mps * dt
+```
+
+검사 중과 pick 중에는 컨베이어를 정지시켜 로봇이 움직이는 물체를 집지 않도록 설계했습니다. 상태 전이는 `station_timeline.csv`와 `conveyor_events.json`에 기록됩니다.
+
+관련 구현 위치:
+
+- `mujoco-robot-sorting/src/robot_sorting/conveyor/conveyor_controller.py`
+- `mujoco-robot-sorting/src/robot_sorting/conveyor/object_feeder.py`
+- `mujoco-robot-sorting/src/robot_sorting/conveyor/station_state.py`
+- `mujoco-robot-sorting/src/robot_sorting/conveyor/conveyor_schemas.py`
+
+생성 산출물:
+
+```text
+station_timeline.csv
+conveyor_events.json
+dashboard_data.json
+report.md
+annotated_detection.png
+trajectory_preview.png
+dashboard/index.html
+```
+
+## 대시보드
+
+대시보드는 구현된 상태입니다. 실행 후 `outputs/run/dashboard/index.html` 정적 파일이 생성되며, `robot-sort dashboard` 명령으로 FastAPI 서버도 실행할 수 있습니다.
+
+대시보드에서 확인 가능한 항목:
+
+- total object count, normal count, defect count
+- placed count, failed count, success rate
+- SLA pass/fail, average/max command latency
+- conveyor state timeline
+- object processing table
+- conveyor event table
+- normal/defect bin detection status
+- overhead_rotate / level_parallel transport mode count
+- table penetration failure, collision failure, no free bin space count
+- annotated detection image
+- trajectory preview image
+
+Dashboard API:
+
+```text
+GET /health
+GET /dashboard
+GET /api/runs/latest
+GET /api/runs/{run_id}/summary
+GET /api/runs/{run_id}/timeline
+GET /api/runs/{run_id}/objects
+GET /api/runs/{run_id}/events
+```
 
 ## 프로그램 구조
 
@@ -312,5 +414,5 @@ placed_objects.json
 - end-effector는 물리 접촉 기반 gripper가 아니라 logical attachment입니다.
 - vision은 explainable OpenCV color thresholding입니다. 조명 변화, 반사, occlusion이 큰 실제 카메라 환경에서는 별도 보정이나 ML detector가 필요합니다.
 - RGB-D depth rendering은 OpenGL/OSMesa 환경 영향을 받을 수 있어 fallback path를 제공합니다.
-- conveyor belt와 dashboard 요구사항은 아직 완전한 UI/dashboard 제품으로 구현되지 않았습니다. 현재는 생산 시나리오 catalog와 CLI 결과 로그 중심입니다.
-- dashboard는 현재 미구현 상태입니다. 아직 `src/robot_sorting/dashboard` 패키지, `robot-sort dashboard` CLI, 웹 대시보드 화면, Docker dashboard 서비스가 없습니다.
+- 컨베이어는 안정적인 테스트를 위해 kinematic abstraction으로 구현되어 실제 벨트 마찰, 미끄러짐, 센서 노이즈를 완전히 모델링하지 않습니다.
+- 대시보드는 정적 HTML과 FastAPI 서빙을 지원하지만, 장기 run persistence나 실시간 WebSocket stream은 아직 포함하지 않습니다.
