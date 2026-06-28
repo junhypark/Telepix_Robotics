@@ -57,3 +57,10 @@ def test_viewer_demo_commands_include_planned_trajectories(two_object_config: Si
 
     assert len(commands) == two_object_config.objects
     assert all(command.trajectory is not None for command in commands)
+
+
+def test_view_command_exposes_conveyor_options() -> None:
+    result = CliRunner().invoke(app, ["view", "--help"])
+
+    assert result.exit_code == 0
+    assert "--enable-conveyor" in result.output

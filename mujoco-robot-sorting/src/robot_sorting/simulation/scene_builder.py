@@ -187,10 +187,10 @@ class SceneBuilder:
 """.strip()
 
     def _generate_objects(self) -> list[SceneObject]:
-        if self.config.object_spawn_positions is not None:
-            return self._generate_configured_objects()
         if self.config.conveyor_enabled:
             return self._generate_conveyor_objects()
+        if self.config.object_spawn_positions is not None:
+            return self._generate_configured_objects()
 
         rng = np.random.default_rng(self.config.seed)
         objects: list[SceneObject] = []

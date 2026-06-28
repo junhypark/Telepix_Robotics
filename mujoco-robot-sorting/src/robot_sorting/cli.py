@@ -378,6 +378,34 @@ def view(
         str | None,
         typer.Option("--scenario", help="Named production scenario id. Use list-scenarios to inspect options."),
     ] = None,
+    random_data: Annotated[
+        bool,
+        typer.Option("--random-data/--scenario-data", help="Use seed-based generated feeder data."),
+    ] = False,
+    enable_conveyor: Annotated[
+        bool,
+        typer.Option("--enable-conveyor/--disable-conveyor", help="Display the conveyor automation-cell scene."),
+    ] = False,
+    conveyor_speed_mps: Annotated[
+        float,
+        typer.Option("--conveyor-speed-mps", min=0.001, help="Kinematic conveyor speed in meters per second."),
+    ] = 0.05,
+    inspection_zone_x: Annotated[
+        float,
+        typer.Option("--inspection-zone-x", help="Inspection zone X coordinate."),
+    ] = 0.30,
+    inspection_zone_y: Annotated[
+        float,
+        typer.Option("--inspection-zone-y", help="Inspection zone Y coordinate."),
+    ] = -0.22,
+    pick_zone_x: Annotated[
+        float,
+        typer.Option("--pick-zone-x", help="Robot pick zone X coordinate."),
+    ] = 0.30,
+    pick_zone_y: Annotated[
+        float,
+        typer.Option("--pick-zone-y", help="Robot pick zone Y coordinate."),
+    ] = -0.22,
     animate: Annotated[
         bool,
         typer.Option("--animate/--static", help="Play the sorting trajectory instead of opening a static viewer."),
@@ -396,6 +424,18 @@ def view(
             config = create_config_for_scenario(scenario, headless=False, save_images=False)
         except KeyError as exc:
             raise typer.BadParameter(str(exc), param_hint="--scenario") from exc
+    _configure_conveyor_runtime(
+        config,
+        enable_conveyor=enable_conveyor,
+        conveyor_speed_mps=conveyor_speed_mps,
+        inspection_zone_x=inspection_zone_x,
+        inspection_zone_y=inspection_zone_y,
+        pick_zone_x=pick_zone_x,
+        pick_zone_y=pick_zone_y,
+        enable_dashboard=False,
+        dashboard_output=None,
+        random_data=random_data,
+    )
     env = MujocoSortingEnv(config)
 
     if not animate:
