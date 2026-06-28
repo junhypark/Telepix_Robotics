@@ -25,20 +25,25 @@ from robot_sorting.modules.vision_module import VisionModule
 from robot_sorting.perception.camera_calibration import build_top_down_workspace_calibration
 from robot_sorting.perception.grasp_pose_generator import generate_top_down_grasp_pose
 from robot_sorting.perception.pose_estimator import estimate_object_pose_3d
+from robot_sorting.planning.bin_placement_planner import find_non_overlapping_bin_slot
 from robot_sorting.planning.trajectory_planner import plan_pick_place_trajectory
 from robot_sorting.robot.controller import RobotController
 from robot_sorting.schemas import (
+    BinPlacementDecision,
     CameraCalibration,
+    DetectedBin,
     DetectedObject,
     ExternalInspectionResult,
     GraspPose,
     ObjectPose3D,
     PickPlaceTask,
+    PlacedObjectRecord,
     PlannedTrajectory,
     RGBDFrame,
     RGBDInspectionObject,
     RobotCommand,
     SimulationConfig,
+    TargetBin,
     TaskExecutionResult,
 )
 from robot_sorting.simulation.mujoco_env import MujocoSortingEnv
@@ -111,12 +116,13 @@ def run(
     rgbd_used = False
     ground_truth_fallback_used = False
     rgbd_objects: list[RGBDInspectionObject] = []
+    detected_bins: list[DetectedBin] = env.get_ground_truth_bins()
 
     if rgbd_frame is not None:
         if config.save_images:
             renderer.save_rgb(rgbd_frame.rgb, config.output_dir / "camera_rgb.png")
             renderer.save_depth(rgbd_frame.depth, config.output_dir / "camera_depth.npy")
-        rgbd_objects = _inspect_rgbd(rgbd_frame, calibration, config, api_client)
+        rgbd_objects, detected_bins = _inspect_rgbd(rgbd_frame, calibration, config, env, api_client)
         if config.objects > 0 and len(rgbd_objects) < config.objects:
             console.print("Depth rendering unavailable. Falling back to MuJoCo ground-truth object poses.")
             renderer.depth_fallback_used = True
@@ -124,13 +130,13 @@ def run(
             if config.save_images:
                 renderer.save_rgb(rgbd_frame.rgb, config.output_dir / "camera_rgb_fallback.png")
                 renderer.save_depth(rgbd_frame.depth, config.output_dir / "camera_depth_fallback.npy")
-            rgbd_objects = _inspect_rgbd(rgbd_frame, calibration, config, api_client)
+            rgbd_objects, detected_bins = _inspect_rgbd(rgbd_frame, calibration, config, env, api_client)
         if rgbd_objects:
             rgbd_used = True
             detections, inspections = _detections_from_rgbd_objects(rgbd_objects, env)
         else:
             console.print("RGB-D inspection API failed. Falling back to image inspection.")
-            detections, inspections, ground_truth_fallback_used = _inspect_image_or_ground_truth(
+            detections, inspections, detected_bins, ground_truth_fallback_used = _inspect_image_or_ground_truth(
                 rgbd_frame.rgb,
                 config,
                 env,
@@ -142,19 +148,21 @@ def run(
             console.print("Renderer unavailable. Falling back to simulation ground-truth object positions.")
             detections = env.get_ground_truth_detections()
             inspections = _fresh_inspections(detections)
+            detected_bins = env.get_ground_truth_bins()
             ground_truth_fallback_used = True
         else:
             if config.save_images:
                 renderer.save_rgb(image, config.output_dir / "camera_rgb.png")
-            detections, inspections, ground_truth_fallback_used = _inspect_image_or_ground_truth(
+            detections, inspections, detected_bins, ground_truth_fallback_used = _inspect_image_or_ground_truth(
                 image,
                 config,
                 env,
                 api_client,
             )
 
-    tasks = TaskPlanner(config).plan(inspections)
     object_pose_map = _object_pose_map(rgbd_objects)
+    placement_decisions = _plan_bin_placements(inspections, object_pose_map, detected_bins, config)
+    tasks = TaskPlanner(config).plan(inspections, detected_bins, placement_decisions)
     grasp_pose_map = _grasp_pose_map(rgbd_objects)
     trajectories = _plan_trajectories(tasks, grasp_pose_map, config)
     commands = create_robot_commands(
@@ -177,6 +185,7 @@ def run(
         detections,
         tasks,
         results,
+        placed_objects=_placed_records_from_results(results, config),
         min_confidence=config.min_confidence,
         rgbd_used=rgbd_used,
         depth_fallback_used=renderer.depth_fallback_used,
@@ -228,16 +237,18 @@ def _launch_static_viewer(env: MujocoSortingEnv) -> None:
 def _build_viewer_demo_commands(env: MujocoSortingEnv, config: SimulationConfig) -> list[RobotCommand]:
     frame = MujocoRenderer(env).render_ground_truth_rgbd()
     calibration = build_top_down_workspace_calibration(config.width, config.height, config.workspace)
-    rgbd_objects = _inspect_rgbd(frame, calibration, config, api_client=None)
+    rgbd_objects, detected_bins = _inspect_rgbd(frame, calibration, config, env, api_client=None)
     if not rgbd_objects:
         return []
 
     _, inspections = _detections_from_rgbd_objects(rgbd_objects, env)
-    tasks = TaskPlanner(config).plan(inspections)
+    object_pose_map = _object_pose_map(rgbd_objects)
+    placement_decisions = _plan_bin_placements(inspections, object_pose_map, detected_bins, config)
+    tasks = TaskPlanner(config).plan(inspections, detected_bins, placement_decisions)
     return create_robot_commands(
         tasks,
         trajectories=_plan_trajectories(tasks, _grasp_pose_map(rgbd_objects), config),
-        object_poses=_object_pose_map(rgbd_objects),
+        object_poses=object_pose_map,
         grasp_poses=_grasp_pose_map(rgbd_objects),
     )
 
@@ -299,16 +310,19 @@ def _inspect_rgbd(
     frame: RGBDFrame,
     calibration: CameraCalibration,
     config: SimulationConfig,
+    env: MujocoSortingEnv,
     api_client: ExternalInspectionApiClient | None,
-) -> list[RGBDInspectionObject]:
+) -> tuple[list[RGBDInspectionObject], list[DetectedBin]]:
     if api_client is not None:
         try:
-            return api_client.inspect_rgbd(frame, calibration, config.workspace).objects
+            response = api_client.inspect_rgbd(frame, calibration, config.workspace)
+            return response.objects, response.bins or env.get_ground_truth_bins()
         except InspectionApiUnavailableError:
-            return []
+            return [], env.get_ground_truth_bins()
 
     objects: list[RGBDInspectionObject] = []
-    for masked in VisionModule(config).detect_with_masks(frame.rgb):
+    vision = VisionModule(config)
+    for masked in vision.detect_with_masks(frame.rgb):
         pose = estimate_object_pose_3d(masked.detected_object, masked.mask, frame.depth, calibration)
         if pose is None:
             continue
@@ -332,7 +346,8 @@ def _inspect_rgbd(
                 grasp_pose=grasp_pose,
             )
         )
-    return objects
+    detected_bins = vision.detect_bins(frame.rgb) or env.get_ground_truth_bins()
+    return objects, detected_bins
 
 
 def _inspect_image_or_ground_truth(
@@ -340,22 +355,25 @@ def _inspect_image_or_ground_truth(
     config: SimulationConfig,
     env: MujocoSortingEnv,
     api_client: ExternalInspectionApiClient | None,
-) -> tuple[list[DetectedObject], list[ExternalInspectionResult], bool]:
+) -> tuple[list[DetectedObject], list[ExternalInspectionResult], list[DetectedBin], bool]:
     if api_client is not None:
         try:
             response = api_client.inspect_image(image, config)
-            return response.detected_objects, _fresh_inspections(response.detected_objects), False
+            detected_bins = response.detected_bins or env.get_ground_truth_bins()
+            return response.detected_objects, _fresh_inspections(response.detected_objects), detected_bins, False
         except InspectionApiUnavailableError:
             console.print("Image inspection API failed. Falling back to MuJoCo ground-truth object poses.")
             detections = env.get_ground_truth_detections()
-            return detections, _fresh_inspections(detections), True
+            return detections, _fresh_inspections(detections), env.get_ground_truth_bins(), True
 
-    detections = VisionModule(config).detect(image)
+    vision = VisionModule(config)
+    detections = vision.detect(image)
+    detected_bins = vision.detect_bins(image) or env.get_ground_truth_bins()
     if not detections:
         console.print("Image inspection produced no detections. Falling back to MuJoCo ground-truth object poses.")
         detections = env.get_ground_truth_detections()
-        return detections, _fresh_inspections(detections), True
-    return detections, _fresh_inspections(detections), False
+        return detections, _fresh_inspections(detections), detected_bins, True
+    return detections, _fresh_inspections(detections), detected_bins, False
 
 
 def _detections_from_rgbd_objects(
@@ -387,6 +405,94 @@ def _fresh_inspections(detections: list[DetectedObject]) -> list[ExternalInspect
         )
         for item in detections
     ]
+
+
+def _plan_bin_placements(
+    inspections: list[ExternalInspectionResult],
+    object_pose_map: dict[str, ObjectPose3D],
+    detected_bins: list[DetectedBin],
+    config: SimulationConfig,
+) -> list[BinPlacementDecision]:
+    bin_by_label = {detected_bin.label: detected_bin for detected_bin in detected_bins}
+    placed_records: list[PlacedObjectRecord] = []
+    decisions: list[BinPlacementDecision] = []
+    for inspection in sorted(inspections, key=lambda item: (item.object_id, item.label)):
+        target_bin: TargetBin = "normal_bin" if inspection.label == "normal" else "defect_bin"
+        detected_bin = bin_by_label.get(target_bin)
+        if detected_bin is None:
+            decisions.append(
+                BinPlacementDecision(
+                    object_id=inspection.object_id,
+                    target_bin_id=target_bin,
+                    target_bin=target_bin,
+                    placement_position=inspection.world_position,
+                    placement_pixel=None,
+                    placement_strategy="fallback_center",
+                    confidence=0.0,
+                    reason="bin_not_detected",
+                    failure_reason="bin_not_detected",
+                )
+            )
+            continue
+        object_size = _object_size_for_placement(inspection.object_id, object_pose_map, config)
+        decision = find_non_overlapping_bin_slot(
+            detected_bin,
+            object_size,
+            placed_records,
+            config.bin_placement,
+            config.workspace,
+            object_id=inspection.object_id,
+        )
+        decisions.append(decision)
+        if decision.failure_reason is None:
+            placed_records.append(
+                PlacedObjectRecord(
+                    object_id=inspection.object_id,
+                    target_bin_id=decision.target_bin_id,
+                    position=decision.placement_position,
+                    size_xyz=object_size,
+                )
+            )
+    return decisions
+
+
+def _placed_records_from_results(
+    results: list[TaskExecutionResult],
+    config: SimulationConfig,
+) -> list[PlacedObjectRecord]:
+    placed: list[PlacedObjectRecord] = []
+    for result in results:
+        if result.status != "completed" or result.target_bin_id is None:
+            continue
+        size_xyz = result.object_pose.size_xyz if result.object_pose is not None else _default_object_size(config)
+        placed.append(
+            PlacedObjectRecord(
+                object_id=result.object_id,
+                target_bin_id=result.target_bin_id,
+                position=result.place_position,
+                size_xyz=size_xyz,
+            )
+        )
+    return placed
+
+
+def _object_size_for_placement(
+    object_id: str,
+    object_pose_map: dict[str, ObjectPose3D],
+    config: SimulationConfig,
+) -> tuple[float, float, float]:
+    pose = object_pose_map.get(object_id)
+    if pose is not None:
+        return pose.size_xyz
+    return _default_object_size(config)
+
+
+def _default_object_size(config: SimulationConfig) -> tuple[float, float, float]:
+    return (
+        config.object_radius * 2.0,
+        config.object_radius * 2.0,
+        config.object_half_height * 2.0,
+    )
 
 
 def _object_pose_map(objects: list[RGBDInspectionObject]) -> dict[str, ObjectPose3D]:
@@ -424,6 +530,9 @@ def _plan_trajectories(
             config.base_radius,
             config.base_height,
             config.safety_margin,
+            config.table_safety,
+            config.link_1,
+            config.link_2,
         )
     return trajectories
 

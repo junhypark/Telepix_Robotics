@@ -7,14 +7,16 @@ import math
 import time
 from collections.abc import Callable
 
-from robot_sorting.robot.kinematics import solve_ik
+from robot_sorting.robot.kinematics import forward_link_positions, solve_ik
 from robot_sorting.robot.safety import (
+    check_link_table_clearance,
     check_self_collision_risk,
     is_inside_base_exclusion_zone,
     is_inside_workspace,
     sample_line_segment,
+    sample_link_segment_points,
 )
-from robot_sorting.schemas import RobotCommand, SimulationConfig, TaskExecutionResult, TrajectoryWaypoint
+from robot_sorting.schemas import JointAngles, RobotCommand, SimulationConfig, TaskExecutionResult, TrajectoryWaypoint
 from robot_sorting.simulation.mujoco_env import MujocoSortingEnv
 
 LOGGER = logging.getLogger(__name__)
@@ -42,6 +44,7 @@ class RobotController:
         self.config = config
         self.step_callback = step_callback
         self.step_logs: list[dict[str, float | str]] = []
+        self._current_min_link_z: float | None = None
 
     def move_end_effector_to(self, target: tuple[float, float, float]) -> tuple[float, float, float]:
         """Move the end effector to a target if it passes safety checks."""
@@ -64,6 +67,7 @@ class RobotController:
             )
             if ik_result.status == "invalid":
                 raise UnsafeMotionError("ik_invalid")
+            self._validate_link_table_clearance(ik_result.angles)
             self.env.set_arm_joint_angles(ik_result.angles)
             if self.step_callback is not None:
                 self.step_callback(self.env.get_end_effector_position())
@@ -89,6 +93,7 @@ class RobotController:
         task = command.task
         workspace_checked = True
         self_collision_checked = True
+        self._current_min_link_z = None
         try:
             if command.trajectory is not None:
                 self._execute_planned_trajectory(command)
@@ -106,15 +111,21 @@ class RobotController:
             pick_position=task.pick_position,
             place_position=task.place_position,
             target_bin=task.target_bin,
+            target_bin_id=task.target_bin_id,
             status=status,
             failure_reason=failure_reason,
             command_latency_seconds=command.command_latency_seconds,
             self_collision_checked=self_collision_checked,
             workspace_checked=workspace_checked,
+            task_placement_strategy=task.placement_strategy,
+            task_placement_confidence=task.placement_confidence,
             object_pose=command.object_pose,
             grasp_pose=command.grasp_pose,
             trajectory_safe=command.trajectory.is_safe if command.trajectory is not None else None,
             collision_checked=command.trajectory is not None,
+            table_clearance_checked=True,
+            min_observed_link_z=self._current_min_link_z,
+            min_required_link_z=self._min_required_link_z(),
         )
 
     def execute_commands(self, commands: list[RobotCommand]) -> list[TaskExecutionResult]:
@@ -154,6 +165,7 @@ class RobotController:
             return
         if not trajectory.is_safe:
             raise UnsafeMotionError(trajectory.failure_reason or "trajectory_collision_risk")
+        self._validate_planned_trajectory_table_clearance(trajectory.waypoints)
         previous: TrajectoryWaypoint | None = None
         for waypoint in trajectory.waypoints:
             self.move_end_effector_to(waypoint.position)
@@ -198,6 +210,46 @@ class RobotController:
             self.config.safety_margin,
         ):
             raise UnsafeMotionError("self_collision_risk")
+
+    def _validate_planned_trajectory_table_clearance(self, waypoints: list[TrajectoryWaypoint]) -> None:
+        for waypoint in waypoints:
+            ik_result = solve_ik(
+                waypoint.position,
+                self.config.link_1,
+                self.config.link_2,
+                self.config.base_height,
+            )
+            if ik_result.status == "invalid":
+                raise UnsafeMotionError("link_table_penetration_risk")
+            self._validate_link_table_clearance(ik_result.angles)
+
+    def _validate_link_table_clearance(self, angles: JointAngles) -> None:
+        positions = forward_link_positions(
+            angles,
+            self.config.link_1,
+            self.config.link_2,
+            self.config.base_height,
+        )
+        base = (0.0, 0.0, self.config.base_height)
+        link_points = [
+            *sample_link_segment_points(base, positions["shoulder"]),
+            *sample_link_segment_points(positions["shoulder"], positions["elbow"]),
+            *sample_link_segment_points(positions["elbow"], positions["wrist"]),
+            *sample_link_segment_points(positions["wrist"], positions["end_effector"]),
+        ]
+        observed = min(point[2] for point in link_points)
+        self._current_min_link_z = (
+            observed if self._current_min_link_z is None else min(self._current_min_link_z, observed)
+        )
+        if not check_link_table_clearance(
+            link_points,
+            self.config.table_safety.table_top_z,
+            self.config.table_safety.min_link_clearance_meters,
+        ):
+            raise UnsafeMotionError("link_table_penetration_risk")
+
+    def _min_required_link_z(self) -> float:
+        return self.config.table_safety.table_top_z + self.config.table_safety.min_link_clearance_meters
 
     def _validate_target(self, target: tuple[float, float, float]) -> None:
         if not all(math.isfinite(value) for value in target):

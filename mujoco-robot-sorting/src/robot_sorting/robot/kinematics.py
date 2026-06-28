@@ -42,18 +42,24 @@ def solve_ik(
 
     cos_elbow = (radial**2 + vertical**2 - link_1**2 - link_2**2) / (2.0 * link_1 * link_2)
     cos_elbow = max(-1.0, min(1.0, cos_elbow))
-    elbow_standard = math.acos(cos_elbow)
-    shoulder_standard = math.atan2(vertical, radial) - math.atan2(
-        link_2 * math.sin(elbow_standard),
-        link_1 + link_2 * math.cos(elbow_standard),
+    elbow_magnitude = math.acos(cos_elbow)
+    candidates = []
+    for elbow_standard in (elbow_magnitude, -elbow_magnitude):
+        shoulder_standard = math.atan2(vertical, radial) - math.atan2(
+            link_2 * math.sin(elbow_standard),
+            link_1 + link_2 * math.cos(elbow_standard),
+        )
+        angles = JointAngles(
+            base_yaw=_clamp(yaw, DEFAULT_JOINT_LIMITS.base_min, DEFAULT_JOINT_LIMITS.base_max),
+            shoulder=_clamp(-shoulder_standard, DEFAULT_JOINT_LIMITS.shoulder_min, DEFAULT_JOINT_LIMITS.shoulder_max),
+            elbow=_clamp(-elbow_standard, DEFAULT_JOINT_LIMITS.elbow_min, DEFAULT_JOINT_LIMITS.elbow_max),
+        )
+        candidates.append((angles, -shoulder_standard, -elbow_standard))
+    angles, raw_shoulder, raw_elbow = max(
+        candidates,
+        key=lambda item: _link_clearance_score(item[0], link_1, link_2, base_height),
     )
-
-    angles = JointAngles(
-        base_yaw=_clamp(yaw, DEFAULT_JOINT_LIMITS.base_min, DEFAULT_JOINT_LIMITS.base_max),
-        shoulder=_clamp(-shoulder_standard, DEFAULT_JOINT_LIMITS.shoulder_min, DEFAULT_JOINT_LIMITS.shoulder_max),
-        elbow=_clamp(-elbow_standard, DEFAULT_JOINT_LIMITS.elbow_min, DEFAULT_JOINT_LIMITS.elbow_max),
-    )
-    if not _angles_equal_to_raw(angles, yaw, -shoulder_standard, -elbow_standard):
+    if not _angles_equal_to_raw(angles, yaw, raw_shoulder, raw_elbow):
         status = "clamped"
 
     clamped_target = (
@@ -85,6 +91,42 @@ def forward_kinematics(
     return (float(x), float(y), float(z))
 
 
+def forward_link_positions(
+    angles: JointAngles,
+    link_1: float,
+    link_2: float,
+    base_height: float,
+) -> dict[str, tuple[float, float, float]]:
+    """Compute major arm link positions for safety validation."""
+
+    shoulder = (0.0, 0.0, float(base_height))
+    elbow_planar_x = link_1 * math.cos(angles.shoulder)
+    elbow_z = base_height - link_1 * math.sin(angles.shoulder)
+    elbow = (
+        float(elbow_planar_x * math.cos(angles.base_yaw)),
+        float(elbow_planar_x * math.sin(angles.base_yaw)),
+        float(elbow_z),
+    )
+    end_effector = forward_kinematics(angles, link_1, link_2, base_height)
+    wrist = end_effector
+    return {
+        "shoulder": shoulder,
+        "elbow": elbow,
+        "wrist": wrist,
+        "end_effector": end_effector,
+    }
+
+
+def _link_clearance_score(
+    angles: JointAngles,
+    link_1: float,
+    link_2: float,
+    base_height: float,
+) -> float:
+    positions = forward_link_positions(angles, link_1, link_2, base_height)
+    return min(point[2] for point in positions.values())
+
+
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     return min(max(value, minimum), maximum)
 
@@ -95,4 +137,3 @@ def _angles_equal_to_raw(angles: JointAngles, yaw: float, shoulder: float, elbow
         and math.isclose(angles.shoulder, shoulder, rel_tol=1e-9, abs_tol=1e-9)
         and math.isclose(angles.elbow, elbow, rel_tol=1e-9, abs_tol=1e-9)
     )
-

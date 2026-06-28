@@ -77,3 +77,48 @@ def sample_line_segment(
         )
     return points
 
+
+def sample_link_segment_points(
+    start: tuple[float, float, float],
+    end: tuple[float, float, float],
+    sample_count: int = 10,
+) -> list[tuple[float, float, float]]:
+    """Sample points along one robot link segment."""
+
+    return sample_line_segment(start, end, samples=max(2, sample_count))
+
+
+def check_link_table_clearance(
+    link_points: list[tuple[float, float, float]],
+    table_top_z: float,
+    min_clearance_meters: float,
+) -> bool:
+    """Return True when all sampled link points are above the table safety height."""
+
+    min_safe_z = table_top_z + min_clearance_meters
+    return all(math.isfinite(point[2]) and point[2] >= min_safe_z for point in link_points)
+
+
+def check_arm_path_table_clearance(
+    joint_positions_by_waypoint: list[dict[str, tuple[float, float, float]]],
+    table_top_z: float,
+    min_clearance_meters: float,
+    link_sample_count: int = 10,
+) -> bool:
+    """Validate shoulder-elbow-wrist-end-effector link segments for every waypoint."""
+
+    for positions in joint_positions_by_waypoint:
+        base = positions.get("base", positions["shoulder"])
+        shoulder = positions["shoulder"]
+        elbow = positions["elbow"]
+        wrist = positions["wrist"]
+        end_effector = positions["end_effector"]
+        link_points = [
+            *sample_link_segment_points(base, shoulder, link_sample_count),
+            *sample_link_segment_points(shoulder, elbow, link_sample_count),
+            *sample_link_segment_points(elbow, wrist, link_sample_count),
+            *sample_link_segment_points(wrist, end_effector, link_sample_count),
+        ]
+        if not check_link_table_clearance(link_points, table_top_z, min_clearance_meters):
+            return False
+    return True

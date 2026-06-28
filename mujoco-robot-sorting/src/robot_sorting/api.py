@@ -66,6 +66,7 @@ async def inspect_image(
         config = _parse_config_json(config_json, rgb.shape)
 
     detected_objects = VisionModule(config).detect(rgb)
+    detected_bins = VisionModule(config).detect_bins(rgb)
     inspection_results = InspectionModule().inspect_all(detected_objects)
     objects = [
         ImageUploadInspectionObject(
@@ -79,7 +80,9 @@ async def inspect_image(
     ]
     return {
         "objects": [item.model_dump(mode="json") for item in objects],
+        "bins": [item.model_dump(mode="json") for item in detected_bins],
         "detected_objects": [item.model_dump(mode="json") for item in detected_objects],
+        "detected_bins": [item.model_dump(mode="json") for item in detected_bins],
         "inspection_results": [item.model_dump(mode="json") for item in inspection_results],
         "processing_time_seconds": time.perf_counter() - started,
     }
@@ -105,7 +108,8 @@ async def inspect_rgbd(
     config.workspace = workspace
 
     objects: list[RGBDInspectionObject] = []
-    masked_detections = VisionModule(config).detect_with_masks(rgb)
+    vision = VisionModule(config)
+    masked_detections = vision.detect_with_masks(rgb)
     for masked in masked_detections:
         pose = estimate_object_pose_3d(masked.detected_object, masked.mask, depth_array, calibration)
         if pose is None:
@@ -130,7 +134,11 @@ async def inspect_rgbd(
                 grasp_pose=grasp_pose,
             )
         )
-    return RGBDInspectionResponse(objects=objects, processing_time_seconds=time.perf_counter() - started)
+    return RGBDInspectionResponse(
+        objects=objects,
+        bins=vision.detect_bins(rgb),
+        processing_time_seconds=time.perf_counter() - started,
+    )
 
 
 @app.post("/inspect-detections")
@@ -141,6 +149,7 @@ def inspect_detections(request: DetectionInspectionRequest) -> InspectionPipelin
     return InspectionPipelineResponse(
         detected_objects=request.detected_objects,
         inspection_results=inspection_results,
+        detected_bins=[],
     )
 
 

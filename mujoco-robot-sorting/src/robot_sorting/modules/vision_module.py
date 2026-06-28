@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from robot_sorting.robot.safety import is_inside_workspace
-from robot_sorting.schemas import DetectedObject, ObjectLabel, SimulationConfig, WorkspaceBounds
+from robot_sorting.schemas import DetectedBin, DetectedObject, ObjectLabel, SimulationConfig, TargetBin, WorkspaceBounds
 
 LOGGER = logging.getLogger(__name__)
 
@@ -19,6 +19,14 @@ class MaskedDetection:
     """Vision detection paired with its binary segmentation mask."""
 
     detected_object: DetectedObject
+    mask: np.ndarray
+
+
+@dataclass(frozen=True)
+class MaskedBinDetection:
+    """Bin detection paired with its binary segmentation mask."""
+
+    detected_bin: DetectedBin
     mask: np.ndarray
 
 
@@ -32,6 +40,11 @@ class VisionModule:
         """Detect colored objects in an RGB image without depending on robot control."""
 
         return [item.detected_object for item in self.detect_with_masks(rgb_image)]
+
+    def detect_bins(self, rgb_image: np.ndarray) -> list[DetectedBin]:
+        """Detect colored target bins in an RGB image."""
+
+        return [item.detected_bin for item in self.detect_bins_with_masks(rgb_image)]
 
     def detect_with_masks(self, rgb_image: np.ndarray) -> list[MaskedDetection]:
         """Detect colored objects and return one mask per detected contour."""
@@ -53,6 +66,29 @@ class VisionModule:
                 item.detected_object.world_position[0],
                 item.detected_object.world_position[1],
                 item.detected_object.label,
+            ),
+        )
+
+    def detect_bins_with_masks(self, rgb_image: np.ndarray) -> list[MaskedBinDetection]:
+        """Detect large colored target bins and return one mask per contour."""
+
+        if rgb_image.ndim != 3 or rgb_image.shape[2] != 3:
+            LOGGER.warning("Vision input is not an RGB image")
+            return []
+
+        hsv = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2HSV)
+        blue_mask = self._mask_blue(hsv)
+        red_mask = self._mask_red(hsv)
+        detections = [
+            *self._bin_detections_from_mask(blue_mask, "normal_bin", rgb_image.shape),
+            *self._bin_detections_from_mask(red_mask, "defect_bin", rgb_image.shape),
+        ]
+        return sorted(
+            detections,
+            key=lambda item: (
+                item.detected_bin.world_position[0],
+                item.detected_bin.world_position[1],
+                item.detected_bin.label,
             ),
         )
 
@@ -82,14 +118,14 @@ class VisionModule:
         return world
 
     def _mask_blue(self, hsv: np.ndarray) -> np.ndarray:
-        lower = np.array([95, self.config.low_saturation_threshold, 45], dtype=np.uint8)
+        lower = np.array([95, self.config.low_saturation_threshold, 130], dtype=np.uint8)
         upper = np.array([130, 255, 255], dtype=np.uint8)
         return self._clean_mask(cv2.inRange(hsv, lower, upper))
 
     def _mask_red(self, hsv: np.ndarray) -> np.ndarray:
-        lower_one = np.array([0, self.config.low_saturation_threshold, 45], dtype=np.uint8)
+        lower_one = np.array([0, self.config.low_saturation_threshold, 130], dtype=np.uint8)
         upper_one = np.array([10, 255, 255], dtype=np.uint8)
-        lower_two = np.array([170, self.config.low_saturation_threshold, 45], dtype=np.uint8)
+        lower_two = np.array([170, self.config.low_saturation_threshold, 130], dtype=np.uint8)
         upper_two = np.array([179, 255, 255], dtype=np.uint8)
         first_red_range = cv2.inRange(hsv, lower_one, upper_one)
         second_red_range = cv2.inRange(hsv, lower_two, upper_two)
@@ -113,6 +149,8 @@ class VisionModule:
         for index, contour in enumerate(sorted_contours):
             area = float(cv2.contourArea(contour))
             if area < self.config.min_area:
+                continue
+            if self._is_bin_contour(area, contour, image_shape):
                 continue
             moments = cv2.moments(contour)
             if moments["m00"] == 0:
@@ -140,6 +178,84 @@ class VisionModule:
                 )
             )
         return detections
+
+    def _bin_detections_from_mask(
+        self,
+        mask: np.ndarray,
+        label: TargetBin,
+        image_shape: tuple[int, ...],
+    ) -> list[MaskedBinDetection]:
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        detections: list[MaskedBinDetection] = []
+        sorted_contours = sorted(contours, key=self._contour_sort_key)
+        for contour in sorted_contours:
+            area = float(cv2.contourArea(contour))
+            if not self._is_bin_contour(area, contour, image_shape):
+                continue
+            moments = cv2.moments(contour)
+            if moments["m00"] == 0:
+                continue
+            center = (
+                round(moments["m10"] / moments["m00"]),
+                round(moments["m01"] / moments["m00"]),
+            )
+            world = self.pixel_to_world(center, image_shape)
+            x, y, width, height = cv2.boundingRect(contour)
+            del x, y
+            size_x, size_y = self._pixel_size_to_world((width, height), image_shape)
+            size_z = self.config.bin_size_xyz[2]
+            bin_world = (world[0], world[1], self.config.table_height + size_z / 2.0)
+            contour_mask = np.zeros(mask.shape, dtype=np.uint8)
+            cv2.drawContours(contour_mask, [contour], contourIdx=-1, color=255, thickness=-1)
+            detections.append(
+                MaskedBinDetection(
+                    detected_bin=DetectedBin(
+                        bin_id=label,
+                        label=label,
+                        pixel_center=center,
+                        world_position=bin_world,
+                        orientation_rpy=(0.0, 0.0, 0.0),
+                        size_xyz=(size_x, size_y, size_z),
+                        confidence=self._confidence(area, contour),
+                    ),
+                    mask=contour_mask,
+                )
+            )
+        return detections
+
+    def _is_bin_contour(self, area: float, contour: np.ndarray, image_shape: tuple[int, ...]) -> bool:
+        x, y, width, height = cv2.boundingRect(contour)
+        del x, y
+        fill_ratio = area / max(float(width * height), 1.0)
+        expected_object_diameter_x = self.config.object_radius * 2.0 * image_shape[1] / max(
+            self.config.workspace.x_max - self.config.workspace.x_min,
+            1e-9,
+        )
+        expected_object_diameter_y = self.config.object_radius * 2.0 * image_shape[0] / max(
+            self.config.workspace.y_max - self.config.workspace.y_min,
+            1e-9,
+        )
+        object_area_px = expected_object_diameter_x * expected_object_diameter_y
+        min_bin_area = max(self.config.min_area * 12.0, object_area_px * 2.5)
+        return (
+            area >= min_bin_area
+            and fill_ratio >= 0.85
+            and width >= expected_object_diameter_x * 1.8
+            and height >= expected_object_diameter_y * 1.8
+        )
+
+    def _pixel_size_to_world(
+        self,
+        size_pixels: tuple[int, int],
+        image_shape: tuple[int, ...],
+    ) -> tuple[float, float]:
+        height, width = image_shape[:2]
+        meters_per_pixel_x = (self.config.workspace.x_max - self.config.workspace.x_min) / max(width - 1, 1)
+        meters_per_pixel_y = (self.config.workspace.y_max - self.config.workspace.y_min) / max(height - 1, 1)
+        return (
+            float(size_pixels[0] * meters_per_pixel_x),
+            float(size_pixels[1] * meters_per_pixel_y),
+        )
 
     def _confidence(self, area: float, contour: np.ndarray) -> float:
         x, y, width, height = cv2.boundingRect(contour)

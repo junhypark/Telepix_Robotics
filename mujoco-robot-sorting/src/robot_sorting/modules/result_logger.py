@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from robot_sorting.schemas import (
     DetectedObject,
     PickPlaceTask,
+    PlacedObjectRecord,
     RunSummary,
     TaskExecutionResult,
 )
@@ -42,6 +43,9 @@ RESULT_LOG_FIELDS = [
     "place_y",
     "place_z",
     "target_bin",
+    "target_bin_id",
+    "placement_strategy",
+    "placement_confidence",
     "status",
     "failure_reason",
     "trajectory_safe",
@@ -49,6 +53,9 @@ RESULT_LOG_FIELDS = [
     "workspace_checked",
     "command_latency_seconds",
     "self_collision_checked",
+    "table_clearance_checked",
+    "min_observed_link_z",
+    "min_required_link_z",
 ]
 
 
@@ -82,6 +89,13 @@ class ResultLogger:
             writer.writeheader()
             for result in results:
                 writer.writerow(self._result_row(result))
+        return path
+
+    def write_placed_objects(self, placed_objects: list[PlacedObjectRecord]) -> Path:
+        """Write placed product state to JSON."""
+
+        path = self.output_dir / "placed_objects.json"
+        self._write_json(path, placed_objects)
         return path
 
     def write_summary(
@@ -118,12 +132,14 @@ class ResultLogger:
         rgbd_used: bool = False,
         depth_fallback_used: bool = False,
         ground_truth_fallback_used: bool = False,
+        placed_objects: list[PlacedObjectRecord] | None = None,
     ) -> RunSummary:
         """Write every required output file and return the summary."""
 
         self.write_detected_objects(detections)
         self.write_planned_tasks(tasks)
         self.write_result_log(results)
+        self.write_placed_objects(placed_objects or [])
         summary = self.build_summary(
             detections,
             results,
@@ -175,6 +191,17 @@ class ResultLogger:
             trajectory_collision_failures=sum(
                 1 for item in results if item.failure_reason == "trajectory_collision_risk"
             ),
+            table_penetration_failures=sum(
+                1 for item in results if item.failure_reason == "link_table_penetration_risk"
+            ),
+            min_observed_link_z=min(
+                (item.min_observed_link_z for item in results if item.min_observed_link_z is not None),
+                default=0.0,
+            ),
+            min_required_link_z=max(
+                (item.min_required_link_z for item in results if item.min_required_link_z is not None),
+                default=0.0,
+            ),
         )
 
     @staticmethod
@@ -213,6 +240,9 @@ class ResultLogger:
             "place_y": place_y,
             "place_z": place_z,
             "target_bin": result.target_bin,
+            "target_bin_id": result.target_bin_id,
+            "placement_strategy": result.task_placement_strategy,
+            "placement_confidence": result.task_placement_confidence,
             "status": result.status,
             "failure_reason": result.failure_reason,
             "trajectory_safe": result.trajectory_safe,
@@ -220,6 +250,9 @@ class ResultLogger:
             "workspace_checked": result.workspace_checked,
             "command_latency_seconds": result.command_latency_seconds,
             "self_collision_checked": result.self_collision_checked,
+            "table_clearance_checked": result.table_clearance_checked,
+            "min_observed_link_z": result.min_observed_link_z,
+            "min_required_link_z": result.min_required_link_z,
         }
 
     @staticmethod

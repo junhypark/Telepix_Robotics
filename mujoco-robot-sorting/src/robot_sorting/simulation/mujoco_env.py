@@ -7,8 +7,8 @@ from typing import Any
 
 import numpy as np
 
-from robot_sorting.schemas import DetectedObject, JointAngles, SimulationConfig
-from robot_sorting.simulation.scene_builder import SceneBuilder, SceneObject
+from robot_sorting.schemas import DetectedBin, DetectedObject, JointAngles, SimulationConfig
+from robot_sorting.simulation.scene_builder import SceneBin, SceneBuilder, SceneObject
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ class MujocoSortingEnv:
         self.scene_builder = SceneBuilder(config)
         self.scene_xml = self.scene_builder.build_xml()
         self.object_specs = self.scene_builder.objects
+        self.bin_specs = self.scene_builder.bins
         self.model: Any = None
         self.data: Any = None
         self._mujoco: Any = None
@@ -110,6 +111,24 @@ class MujocoSortingEnv:
                 )
             )
         return detections
+
+    def get_ground_truth_bins(self) -> list[DetectedBin]:
+        """Represent generated bin positions as fallback detected bins."""
+
+        bins: list[DetectedBin] = []
+        for bin_spec in self.bin_specs:
+            bins.append(
+                DetectedBin(
+                    bin_id=bin_spec.bin_id,
+                    label=bin_spec.label,
+                    pixel_center=self.world_to_pixel(bin_spec.position),
+                    world_position=bin_spec.position,
+                    orientation_rpy=bin_spec.orientation_rpy,
+                    size_xyz=bin_spec.size_xyz,
+                    confidence=1.0,
+                )
+            )
+        return bins
 
     def set_arm_joint_angles(self, angles: JointAngles) -> None:
         """Set the simplified arm joints directly and update kinematics."""
@@ -219,3 +238,9 @@ def object_spec_by_id(objects: list[SceneObject], object_id: str) -> SceneObject
     """Find an object spec by id."""
 
     return next((obj for obj in objects if obj.object_id == object_id), None)
+
+
+def bin_spec_by_id(bins: list[SceneBin], bin_id: str) -> SceneBin | None:
+    """Find a bin spec by id."""
+
+    return next((item for item in bins if item.bin_id == bin_id), None)

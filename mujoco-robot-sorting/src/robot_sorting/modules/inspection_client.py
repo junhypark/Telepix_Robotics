@@ -13,6 +13,7 @@ import numpy as np
 
 from robot_sorting.schemas import (
     CameraCalibration,
+    DetectedBin,
     DetectedObject,
     DetectionInspectionRequest,
     ImageInspectionRequest,
@@ -70,10 +71,15 @@ class ExternalInspectionApiClient:
                     }
                 ).inspection_results
             ],
+            detected_bins=[
+                DetectedBin.model_validate(item)
+                for item in body.get("detected_bins", body.get("bins", []))
+            ],
         )
         return InspectionFallbackResult(
             detected_objects=response.detected_objects,
             inspection_results=response.inspection_results,
+            detected_bins=response.detected_bins,
             used_image_fallback=True,
         )
 

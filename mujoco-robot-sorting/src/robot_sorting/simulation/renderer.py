@@ -104,6 +104,19 @@ class MujocoRenderer:
         calibration = build_top_down_workspace_calibration(config.width, config.height, config.workspace)
         camera_z = calibration.extrinsics.translation_world_from_camera[2]
         depth = np.full((config.height, config.width), camera_z - config.table_height, dtype=np.float32)
+        meters_per_pixel_x = (config.workspace.x_max - config.workspace.x_min) / max(config.width - 1, 1)
+        meters_per_pixel_y = (config.workspace.y_max - config.workspace.y_min) / max(config.height - 1, 1)
+        for bin_spec in self.env.bin_specs:
+            px, py = self.env.world_to_pixel(bin_spec.position)
+            color = (0, 0, 255) if bin_spec.label == "normal_bin" else (255, 0, 0)
+            half_width = max(5, int((bin_spec.size_xyz[0] / 2.0) / meters_per_pixel_x))
+            half_height = max(5, int((bin_spec.size_xyz[1] / 2.0) / meters_per_pixel_y))
+            top_left = (max(0, px - half_width), max(0, py - half_height))
+            bottom_right = (min(config.width - 1, px + half_width), min(config.height - 1, py + half_height))
+            cv2.rectangle(image, top_left, bottom_right, color, thickness=-1)
+            depth[top_left[1] : bottom_right[1] + 1, top_left[0] : bottom_right[0] + 1] = (
+                camera_z - bin_spec.position[2]
+            )
         for obj in self.env.object_specs:
             px, py = self.env.world_to_pixel(obj.position)
             color = (0, 0, 255) if obj.label == "normal" else (255, 0, 0)

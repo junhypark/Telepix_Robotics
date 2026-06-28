@@ -8,7 +8,7 @@ from html import escape
 import numpy as np
 
 from robot_sorting.robot.safety import is_inside_base_exclusion_zone, is_inside_workspace
-from robot_sorting.schemas import ObjectLabel, SimulationConfig
+from robot_sorting.schemas import ObjectLabel, SimulationConfig, TargetBin
 
 
 @dataclass(frozen=True)
@@ -21,20 +21,41 @@ class SceneObject:
     color: tuple[float, float, float, float]
 
 
+@dataclass(frozen=True)
+class SceneBin:
+    """Seed-generated target bin specification used to build the MuJoCo scene."""
+
+    bin_id: str
+    label: TargetBin
+    position: tuple[float, float, float]
+    size_xyz: tuple[float, float, float]
+    color_rgb: tuple[int, int, int]
+    orientation_rpy: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
 class SceneBuilder:
     """Build a deterministic educational sorting scene as MuJoCo XML."""
 
     def __init__(self, config: SimulationConfig) -> None:
         self.config = config
         self.objects = self._generate_objects()
+        self.bins = self._generate_bins(self.objects)
 
     def build_xml(self) -> str:
         """Return a complete MuJoCo XML model."""
 
         object_xml = "\n".join(self._object_body_xml(obj) for obj in self.objects)
-        object_top = self.config.table_height + self.config.object_half_height
-        normal_bin_pos = self._format_xyz((*self.config.normal_bin_position[:2], object_top))
-        defect_bin_pos = self._format_xyz((*self.config.defect_bin_position[:2], object_top))
+        normal_bin = self._bin_by_label("normal_bin")
+        defect_bin = self._bin_by_label("defect_bin")
+        normal_bin_pos = self._format_xyz(normal_bin.position)
+        defect_bin_pos = self._format_xyz(defect_bin.position)
+        bin_half_size = self._format_xyz(
+            (
+                self.config.bin_size_xyz[0] / 2.0,
+                self.config.bin_size_xyz[1] / 2.0,
+                self.config.bin_size_xyz[2] / 2.0,
+            )
+        )
         base_size = f"{self.config.base_radius:.6f} {self.config.base_height / 2:.6f}"
         return f"""
 <mujoco model="robot_sorting">
@@ -55,8 +76,8 @@ class SceneBuilder:
     <material name="mat_gripper" rgba="0.08 0.08 0.08 1"/>
     <material name="mat_normal" rgba="0.05 0.20 0.95 1"/>
     <material name="mat_defect" rgba="0.95 0.05 0.03 1"/>
-    <material name="mat_normal_bin" rgba="0.10 0.65 0.25 0.35"/>
-    <material name="mat_defect_bin" rgba="0.95 0.82 0.05 0.35"/>
+    <material name="mat_normal_bin" rgba="0.02 0.18 0.95 1"/>
+    <material name="mat_defect_bin" rgba="0.95 0.03 0.03 1"/>
   </asset>
 
   <worldbody>
@@ -68,11 +89,11 @@ class SceneBuilder:
     </body>
 
     <body name="normal_bin" pos="{normal_bin_pos}">
-      <geom name="normal_bin_geom" type="box" size="0.075 0.065 0.018" material="mat_normal_bin"/>
+      <geom name="normal_bin_geom" type="box" size="{bin_half_size}" material="mat_normal_bin"/>
     </body>
 
     <body name="defect_bin" pos="{defect_bin_pos}">
-      <geom name="defect_bin_geom" type="box" size="0.075 0.065 0.018" material="mat_defect_bin"/>
+      <geom name="defect_bin_geom" type="box" size="{bin_half_size}" material="mat_defect_bin"/>
     </body>
 
     <body name="robot_base" pos="0 0 {self.config.base_height / 2:.6f}">
@@ -191,6 +212,48 @@ class SceneBuilder:
             raise ValueError("Could not place deterministic objects inside the safe workspace")
         return objects
 
+    def _generate_bins(self, objects: list[SceneObject]) -> list[SceneBin]:
+        rng = np.random.default_rng(self.config.seed + 17_000)
+        bins: list[SceneBin] = []
+        labels: tuple[TargetBin, ...] = ("normal_bin", "defect_bin")
+        colors = {"normal_bin": (5, 45, 242), "defect_bin": (242, 8, 8)}
+        half_x = self.config.bin_size_xyz[0] / 2.0
+        half_y = self.config.bin_size_xyz[1] / 2.0
+        z = self.config.table_height + self.config.bin_size_xyz[2] / 2.0
+        for label in labels:
+            for _ in range(500):
+                x = float(rng.uniform(self.config.workspace.x_min + half_x, self.config.workspace.x_max - half_x))
+                y = float(rng.uniform(self.config.workspace.y_min + half_y, self.config.workspace.y_max - half_y))
+                position = (x, y, z)
+                if not is_inside_workspace(position, self.config.workspace):
+                    continue
+                if not self._is_reachable(position):
+                    continue
+                if is_inside_base_exclusion_zone(
+                    position,
+                    self.config.base_radius + self.config.safety_margin + max(half_x, half_y),
+                    0.0,
+                    self.config.base_height + self.config.safety_margin,
+                ):
+                    continue
+                if any(self._overlaps_object(position, obj.position) for obj in objects):
+                    continue
+                if any(self._overlaps_bin(position, existing.position) for existing in bins):
+                    continue
+                bins.append(
+                    SceneBin(
+                        bin_id=label,
+                        label=label,
+                        position=position,
+                        size_xyz=self.config.bin_size_xyz,
+                        color_rgb=colors[label],
+                    )
+                )
+                break
+            else:
+                raise ValueError(f"Could not place deterministic {label} inside the safe workspace")
+        return bins
+
     def _object_body_xml(self, obj: SceneObject) -> str:
         material = "mat_normal" if obj.label == "normal" else "mat_defect"
         x, y, z = obj.position
@@ -202,6 +265,36 @@ class SceneBuilder:
             material="{material}"/>
     </body>
 """.rstrip()
+
+    def _bin_by_label(self, label: TargetBin) -> SceneBin:
+        return next(item for item in self.bins if item.label == label)
+
+    def _is_reachable(self, position: tuple[float, float, float]) -> bool:
+        radial = float(np.hypot(position[0], position[1]))
+        reach = self.config.link_1 + self.config.link_2 - self.config.safety_margin
+        return radial <= reach
+
+    def _overlaps_object(
+        self,
+        bin_position: tuple[float, float, float],
+        object_position: tuple[float, float, float],
+    ) -> bool:
+        bin_half_x = self.config.bin_size_xyz[0] / 2.0
+        bin_half_y = self.config.bin_size_xyz[1] / 2.0
+        margin = self.config.object_radius + self.config.bin_placement.object_spacing_margin_meters
+        return (
+            abs(bin_position[0] - object_position[0]) <= bin_half_x + margin
+            and abs(bin_position[1] - object_position[1]) <= bin_half_y + margin
+        )
+
+    def _overlaps_bin(
+        self,
+        candidate: tuple[float, float, float],
+        existing: tuple[float, float, float],
+    ) -> bool:
+        min_x_gap = self.config.bin_size_xyz[0] + self.config.bin_placement.object_spacing_margin_meters
+        min_y_gap = self.config.bin_size_xyz[1] + self.config.bin_placement.object_spacing_margin_meters
+        return abs(candidate[0] - existing[0]) <= min_x_gap and abs(candidate[1] - existing[1]) <= min_y_gap
 
     @staticmethod
     def _format_xyz(position: tuple[float, float, float]) -> str:
