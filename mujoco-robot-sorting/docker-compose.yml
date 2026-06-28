@@ -1,0 +1,58 @@
+services:
+  inspection-api:
+    build: .
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command: uv run uvicorn robot_sorting.api:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "uv", "run", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - robot-sorting-net
+
+  sim:
+    build: .
+    environment:
+      MUJOCO_GL: osmesa
+      PYTHONUNBUFFERED: "1"
+      INSPECTION_API_URL: http://inspection-api:8000
+    volumes:
+      - ./outputs:/app/outputs
+    depends_on:
+      inspection-api:
+        condition: service_healthy
+    networks:
+      - robot-sorting-net
+    command: >
+      uv run robot-sort run
+      --headless
+      --objects 5
+      --seed 42
+      --output outputs/run
+
+  test:
+    build: .
+    environment:
+      MUJOCO_GL: osmesa
+      PYTHONUNBUFFERED: "1"
+    command: uv run pytest -q
+    networks:
+      - robot-sorting-net
+
+  lint:
+    build: .
+    command: uv run ruff check .
+    networks:
+      - robot-sorting-net
+
+  typecheck:
+    build: .
+    command: uv run mypy src
+    networks:
+      - robot-sorting-net
+
+networks:
+  robot-sorting-net:
+    driver: bridge
