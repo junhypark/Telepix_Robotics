@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -28,6 +29,7 @@ from robot_sorting.perception.pose_estimator import estimate_object_pose_3d
 from robot_sorting.planning.bin_placement_planner import find_non_overlapping_bin_slot
 from robot_sorting.planning.trajectory_planner import plan_pick_place_trajectory
 from robot_sorting.robot.controller import RobotController
+from robot_sorting.scenarios import SCENARIOS, create_config_for_scenario, get_scenario, scenario_ids
 from robot_sorting.schemas import (
     BinPlacementDecision,
     CameraCalibration,
@@ -89,6 +91,10 @@ def run(
             help="FastAPI external inspection service URL. Defaults to INSPECTION_API_URL.",
         ),
     ] = None,
+    scenario: Annotated[
+        str | None,
+        typer.Option("--scenario", help="Named production scenario id. Use list-scenarios to inspect options."),
+    ] = None,
     viewer_delay: Annotated[
         float,
         typer.Option("--viewer-delay", min=0.0, help="Frame delay in seconds when --viewer is used."),
@@ -97,15 +103,28 @@ def run(
     """Run the full external-inspection sorting pipeline."""
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
-    config = create_simulation_config(
-        headless=headless,
-        objects=objects,
-        seed=seed,
-        width=width,
-        height=height,
-        output_dir=output,
-        save_images=save_images,
-    )
+    if scenario is None:
+        config = create_simulation_config(
+            headless=headless,
+            objects=objects,
+            seed=seed,
+            width=width,
+            height=height,
+            output_dir=output,
+            save_images=save_images,
+        )
+    else:
+        try:
+            config = create_config_for_scenario(
+                scenario,
+                headless=headless,
+                width=width,
+                height=height,
+                output_dir=output,
+                save_images=save_images,
+            )
+        except KeyError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--scenario") from exc
 
     env = MujocoSortingEnv(config)
     renderer = MujocoRenderer(env)
@@ -196,6 +215,66 @@ def run(
         f"Placed {summary.placed_count}/{summary.total_objects}, "
         f"max command latency={summary.max_command_latency_seconds:.6f}s"
     )
+
+
+@app.command("list-scenarios")
+def list_scenarios() -> None:
+    """List deterministic production scenarios."""
+
+    for scenario in SCENARIOS:
+        console.print(f"{scenario.scenario_id}: {scenario.name_ko}")
+        console.print(f"  {scenario.description_ko}")
+
+
+@app.command("run-scenarios")
+def run_scenarios(
+    output: Annotated[Path, typer.Option("--output", help="Scenario output root.")] = Path("outputs/scenarios"),
+    save_images: Annotated[
+        bool,
+        typer.Option("--save-images/--no-save-images", help="Save camera images for each scenario."),
+    ] = False,
+) -> None:
+    """Run every scenario and fail if any scenario does not complete."""
+
+    results: list[dict[str, object]] = []
+    for scenario_id in scenario_ids():
+        scenario_output = output / scenario_id
+        console.print(f"Running scenario: {scenario_id}")
+        run(
+            headless=True,
+            objects=0,
+            seed=0,
+            output=scenario_output,
+            save_images=save_images,
+            inspection_api_url=None,
+            scenario=scenario_id,
+        )
+        summary_path = scenario_output / "summary.json"
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        passed = summary["placed_count"] == summary["total_objects"] and summary["failed_count"] == 0
+        results.append(
+            {
+                "scenario_id": scenario_id,
+                "name_ko": get_scenario(scenario_id).name_ko,
+                "passed": passed,
+                "placed_count": summary["placed_count"],
+                "total_objects": summary["total_objects"],
+                "failed_count": summary["failed_count"],
+            }
+        )
+        if not passed:
+            (output / "scenario_results.json").parent.mkdir(parents=True, exist_ok=True)
+            (output / "scenario_results.json").write_text(
+                json.dumps(results, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            raise typer.Exit(code=1)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "scenario_results.json").write_text(
+        json.dumps(results, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    console.print(f"All {len(results)} scenarios passed. Outputs: {output}")
 
 
 @app.command()

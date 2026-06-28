@@ -176,6 +176,9 @@ class SceneBuilder:
 """.strip()
 
     def _generate_objects(self) -> list[SceneObject]:
+        if self.config.object_spawn_positions is not None:
+            return self._generate_configured_objects()
+
         rng = np.random.default_rng(self.config.seed)
         objects: list[SceneObject] = []
         attempts = 0
@@ -197,7 +200,7 @@ class SceneBuilder:
             if any(np.linalg.norm(np.array(position[:2]) - np.array(obj.position[:2])) < 0.075 for obj in objects):
                 continue
 
-            label: ObjectLabel = "normal" if len(objects) % 2 == 0 else "defect"
+            label = self._label_for_index(len(objects))
             color = (0.05, 0.20, 0.95, 1.0) if label == "normal" else (0.95, 0.05, 0.03, 1.0)
             objects.append(
                 SceneObject(
@@ -212,6 +215,33 @@ class SceneBuilder:
             raise ValueError("Could not place deterministic objects inside the safe workspace")
         return objects
 
+    def _generate_configured_objects(self) -> list[SceneObject]:
+        positions = self.config.object_spawn_positions or ()
+        if len(positions) != self.config.objects:
+            raise ValueError("Configured scenario object count must match SimulationConfig.objects")
+        objects: list[SceneObject] = []
+        for index, position in enumerate(positions):
+            if not is_inside_workspace(position, self.config.workspace):
+                raise ValueError(f"Configured object_{index} is outside the workspace")
+            if is_inside_base_exclusion_zone(
+                position,
+                self.config.base_radius + 0.05,
+                0.0,
+                self.config.base_height + 0.04,
+            ):
+                raise ValueError(f"Configured object_{index} is inside the base exclusion zone")
+            label = self._label_for_index(index)
+            color = (0.05, 0.20, 0.95, 1.0) if label == "normal" else (0.95, 0.05, 0.03, 1.0)
+            objects.append(
+                SceneObject(
+                    object_id=f"object_{index}",
+                    label=label,
+                    position=position,
+                    color=color,
+                )
+            )
+        return objects
+
     def _generate_bins(self, objects: list[SceneObject]) -> list[SceneBin]:
         rng = np.random.default_rng(self.config.seed + 17_000)
         bins: list[SceneBin] = []
@@ -221,24 +251,24 @@ class SceneBuilder:
         half_y = self.config.bin_size_xyz[1] / 2.0
         z = self.config.table_height + self.config.bin_size_xyz[2] / 2.0
         for label in labels:
+            configured = self._configured_bin_position(label)
+            if configured is not None:
+                self._validate_bin_position(configured, label, objects, bins)
+                bins.append(
+                    SceneBin(
+                        bin_id=label,
+                        label=label,
+                        position=configured,
+                        size_xyz=self.config.bin_size_xyz,
+                        color_rgb=colors[label],
+                    )
+                )
+                continue
             for _ in range(500):
                 x = float(rng.uniform(self.config.workspace.x_min + half_x, self.config.workspace.x_max - half_x))
                 y = float(rng.uniform(self.config.workspace.y_min + half_y, self.config.workspace.y_max - half_y))
                 position = (x, y, z)
-                if not is_inside_workspace(position, self.config.workspace):
-                    continue
-                if not self._is_reachable(position):
-                    continue
-                if is_inside_base_exclusion_zone(
-                    position,
-                    self.config.base_radius + self.config.safety_margin + max(half_x, half_y),
-                    0.0,
-                    self.config.base_height + self.config.safety_margin,
-                ):
-                    continue
-                if any(self._overlaps_object(position, obj.position) for obj in objects):
-                    continue
-                if any(self._overlaps_bin(position, existing.position) for existing in bins):
+                if not self._is_valid_bin_position(position, objects, bins):
                     continue
                 bins.append(
                     SceneBin(
@@ -273,6 +303,48 @@ class SceneBuilder:
         radial = float(np.hypot(position[0], position[1]))
         reach = self.config.link_1 + self.config.link_2 - self.config.safety_margin
         return radial <= reach
+
+    def _configured_bin_position(self, label: TargetBin) -> tuple[float, float, float] | None:
+        if label == "normal_bin":
+            return self.config.normal_bin_spawn_position
+        return self.config.defect_bin_spawn_position
+
+    def _validate_bin_position(
+        self,
+        position: tuple[float, float, float],
+        label: TargetBin,
+        objects: list[SceneObject],
+        existing_bins: list[SceneBin],
+    ) -> None:
+        if not self._is_valid_bin_position(position, objects, existing_bins):
+            raise ValueError(f"Configured {label} is not a safe bin position")
+
+    def _is_valid_bin_position(
+        self,
+        position: tuple[float, float, float],
+        objects: list[SceneObject],
+        existing_bins: list[SceneBin],
+    ) -> bool:
+        half_x = self.config.bin_size_xyz[0] / 2.0
+        half_y = self.config.bin_size_xyz[1] / 2.0
+        return (
+            is_inside_workspace(position, self.config.workspace)
+            and self._is_reachable(position)
+            and not is_inside_base_exclusion_zone(
+                position,
+                self.config.base_radius + self.config.safety_margin + max(half_x, half_y),
+                0.0,
+                self.config.base_height + self.config.safety_margin,
+            )
+            and not any(self._overlaps_object(position, obj.position) for obj in objects)
+            and not any(self._overlaps_bin(position, existing.position) for existing in existing_bins)
+        )
+
+    def _label_for_index(self, index: int) -> ObjectLabel:
+        labels = self.config.object_label_sequence
+        if labels:
+            return labels[index % len(labels)]
+        return "normal" if index % 2 == 0 else "defect"
 
     def _overlaps_object(
         self,

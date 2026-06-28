@@ -63,6 +63,7 @@ class SimulationConfig(StrictBaseModel):
     """Top-level configuration for the simulation run."""
 
     headless: bool = True
+    scenario_id: str = "seeded_random_batch"
     objects: int = Field(default=5, ge=0, le=50)
     seed: int = 42
     width: int = Field(default=640, ge=64)
@@ -82,6 +83,10 @@ class SimulationConfig(StrictBaseModel):
     approach_height: float = 0.11
     normal_bin_position: tuple[float, float, float] = (0.45, 0.28, 0.055)
     defect_bin_position: tuple[float, float, float] = (0.45, -0.28, 0.055)
+    object_label_sequence: tuple[ObjectLabel, ...] | None = None
+    object_spawn_positions: tuple[tuple[float, float, float], ...] | None = None
+    normal_bin_spawn_position: tuple[float, float, float] | None = None
+    defect_bin_spawn_position: tuple[float, float, float] | None = None
     bin_size_xyz: tuple[float, float, float] = (0.22, 0.18, 0.04)
     table_safety: TableSafetyConfig = Field(default_factory=TableSafetyConfig)
     bin_placement: BinPlacementConfig = Field(default_factory=BinPlacementConfig)
