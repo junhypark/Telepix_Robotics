@@ -49,7 +49,10 @@ class SceneBuilder:
   <asset>
     <material name="mat_table" rgba="0.72 0.72 0.68 1"/>
     <material name="mat_robot" rgba="0.70 0.76 0.82 1"/>
+    <material name="mat_robot_dark" rgba="0.45 0.50 0.55 1"/>
     <material name="mat_base" rgba="0.28 0.30 0.34 1"/>
+    <material name="mat_joint" rgba="0.92 0.95 0.98 1"/>
+    <material name="mat_gripper" rgba="0.08 0.08 0.08 1"/>
     <material name="mat_normal" rgba="0.05 0.20 0.95 1"/>
     <material name="mat_defect" rgba="0.95 0.05 0.03 1"/>
     <material name="mat_normal_bin" rgba="0.10 0.65 0.25 0.35"/>
@@ -74,25 +77,64 @@ class SceneBuilder:
 
     <body name="robot_base" pos="0 0 {self.config.base_height / 2:.6f}">
       <geom name="robot_base_geom" type="cylinder" size="{base_size}" material="mat_base"/>
+      <geom name="robot_base_column_geom" type="cylinder" pos="0 0 0.030000"
+            size="0.060000 0.045000" material="mat_robot_dark"/>
     </body>
 
     <body name="robot_shoulder" pos="0 0 {self.config.base_height:.6f}">
       <joint name="base_yaw_joint" type="hinge" axis="0 0 1" limited="true"
              range="{self.config.joint_limits.base_min:.6f} {self.config.joint_limits.base_max:.6f}"/>
-      <geom name="shoulder_geom" type="sphere" size="0.045" material="mat_robot"/>
+      <geom name="shoulder_axis_geom" type="capsule" fromto="0 -0.065 0 0 0.065 0"
+            size="0.044" material="mat_joint"/>
+      <geom name="shoulder_cover_geom" type="box" pos="-0.010 0 0.010"
+            size="0.040 0.038 0.044" material="mat_robot"/>
       <body name="robot_upper_link" pos="0 0 0">
         <joint name="shoulder_joint" type="hinge" axis="0 1 0" limited="true"
                range="{self.config.joint_limits.shoulder_min:.6f} {self.config.joint_limits.shoulder_max:.6f}"/>
-        <geom name="upper_link_geom" type="capsule"
-              fromto="0 0 0 {self.config.link_1:.6f} 0 0" size="0.025" material="mat_robot"/>
-        <body name="robot_forearm_link" pos="{self.config.link_1:.6f} 0 0">
+        <geom name="upper_link_left_rail_geom" type="capsule"
+              fromto="0.035 -0.026 0.018 {self.config.link_1 - 0.035:.6f} -0.026 0.018"
+              size="0.018" material="mat_robot"/>
+        <geom name="upper_link_right_rail_geom" type="capsule"
+              fromto="0.035 0.026 0.018 {self.config.link_1 - 0.035:.6f} 0.026 0.018"
+              size="0.018" material="mat_robot"/>
+        <geom name="upper_link_spine_geom" type="capsule"
+              fromto="0.030 0 -0.008 {self.config.link_1 - 0.030:.6f} 0 -0.008"
+              size="0.014" material="mat_robot_dark"/>
+        <body name="robot_elbow" pos="{self.config.link_1:.6f} 0 0">
           <joint name="elbow_joint" type="hinge" axis="0 1 0" limited="true"
                  range="{self.config.joint_limits.elbow_min:.6f} {self.config.joint_limits.elbow_max:.6f}"/>
-          <geom name="forearm_link_geom" type="capsule"
-                fromto="0 0 0 {self.config.link_2:.6f} 0 0" size="0.021" material="mat_robot"/>
-          <body name="end_effector" pos="{self.config.link_2:.6f} 0 0">
-            <geom name="end_effector_geom" type="sphere" size="0.032" rgba="0.05 0.05 0.05 1"/>
-            <site name="end_effector_site" pos="0 0 0" size="0.018" rgba="0 1 0 1"/>
+          <geom name="elbow_axis_geom" type="capsule" fromto="0 -0.058 0 0 0.058 0"
+                size="0.038" material="mat_joint"/>
+          <geom name="elbow_cover_geom" type="sphere" size="0.044" material="mat_robot"/>
+          <body name="robot_forearm_link" pos="0 0 0">
+            <geom name="forearm_left_rail_geom" type="capsule"
+                  fromto="0.030 -0.022 -0.010 {self.config.link_2 - 0.040:.6f} -0.022 -0.010"
+                  size="0.016" material="mat_robot"/>
+            <geom name="forearm_right_rail_geom" type="capsule"
+                  fromto="0.030 0.022 -0.010 {self.config.link_2 - 0.040:.6f} 0.022 -0.010"
+                  size="0.016" material="mat_robot"/>
+            <geom name="forearm_spine_geom" type="capsule"
+                  fromto="0.020 0 0.012 {self.config.link_2 - 0.030:.6f} 0 0.012"
+                  size="0.012" material="mat_robot_dark"/>
+            <body name="end_effector" pos="{self.config.link_2:.6f} 0 0">
+              <body name="robot_wrist" pos="0 0 0">
+                <geom name="wrist_roll_geom" type="capsule" fromto="-0.025 0 0 0.025 0 0"
+                      size="0.026" material="mat_joint"/>
+                <geom name="wrist_drop_geom" type="capsule" fromto="0 0 0.050 0 0 0.008"
+                      size="0.014" material="mat_robot_dark"/>
+                <geom name="gripper_palm_geom" type="box" pos="0 0 0.006"
+                      size="0.018 0.040 0.012" material="mat_gripper"/>
+                <body name="left_gripper_finger" pos="0 -0.030 -0.014">
+                  <geom name="left_gripper_finger_geom" type="box" pos="0 0 0"
+                        size="0.010 0.006 0.032" material="mat_gripper"/>
+                </body>
+                <body name="right_gripper_finger" pos="0 0.030 -0.014">
+                  <geom name="right_gripper_finger_geom" type="box" pos="0 0 0"
+                        size="0.010 0.006 0.032" material="mat_gripper"/>
+                </body>
+                <site name="end_effector_site" pos="0 0 0" size="0.018" rgba="0 1 0 1"/>
+              </body>
+            </body>
           </body>
         </body>
       </body>

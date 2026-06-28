@@ -35,7 +35,11 @@ def test_scene_contains_required_named_entities(two_object_config: SimulationCon
     for name in [
         "robot_base",
         "robot_upper_link",
+        "robot_elbow",
         "robot_forearm_link",
+        "robot_wrist",
+        "left_gripper_finger",
+        "right_gripper_finger",
         "end_effector",
         "table",
         "normal_bin",
@@ -43,6 +47,14 @@ def test_scene_contains_required_named_entities(two_object_config: SimulationCon
         "object_0",
     ]:
         assert env.get_body_id(name) >= 0
+    for name in [
+        "shoulder_axis_geom",
+        "elbow_axis_geom",
+        "wrist_roll_geom",
+        "left_gripper_finger_geom",
+        "right_gripper_finger_geom",
+    ]:
+        assert env.get_geom_id(name) >= 0
     assert env.get_camera_id(two_object_config.renderer_camera) >= 0
 
 
@@ -54,4 +66,3 @@ def test_camera_rendering_works_or_skips(two_object_config: SimulationConfig) ->
         pytest.skip("MuJoCo rendering unavailable in this environment")
 
     assert image.shape == (two_object_config.height, two_object_config.width, 3)
-
