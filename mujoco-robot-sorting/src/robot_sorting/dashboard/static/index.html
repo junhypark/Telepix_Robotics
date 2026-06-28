@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Robot Sorting Automation Cell Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>Robot Sorting Automation Cell Dashboard</h1>
+        <p id="run-id"></p>
+      </div>
+      <span id="sla-badge" class="badge"></span>
+    </header>
+
+    <main>
+      <section id="cards" class="cards"></section>
+
+      <section class="panel">
+        <h2>Station Timeline</h2>
+        <div id="timeline" class="timeline"></div>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>Object Processing Results</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Object</th>
+                  <th>Label</th>
+                  <th>Status</th>
+                  <th>Target</th>
+                  <th>Mode</th>
+                  <th>Latency</th>
+                </tr>
+              </thead>
+              <tbody id="objects"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>Conveyor Events</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>State</th>
+                  <th>Object</th>
+                  <th>Event</th>
+                </tr>
+              </thead>
+              <tbody id="events"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>Annotated Detection</h2>
+          <img src="../annotated_detection.png" alt="annotated detection" />
+        </article>
+        <article class="panel">
+          <h2>Trajectory Preview</h2>
+          <img src="../trajectory_preview.png" alt="trajectory preview" />
+        </article>
+      </section>
+    </main>
+
+    <script>
+      window.DASHBOARD_DATA = __DASHBOARD_DATA__;
+    </script>
+    <script src="app.js"></script>
+  </body>
+</html>
