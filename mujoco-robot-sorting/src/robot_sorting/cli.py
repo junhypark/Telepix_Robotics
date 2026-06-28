@@ -168,6 +168,20 @@ def run(
     )
 
 
+@app.command()
+def view(
+    objects: Annotated[int, typer.Option("--objects", min=0, help="Number of objects to display.")] = 5,
+    seed: Annotated[int, typer.Option("--seed", help="Deterministic scene seed.")] = 42,
+) -> None:
+    """Open the MuJoCo viewer for local visual inspection."""
+
+    config = create_simulation_config(headless=False, objects=objects, seed=seed)
+    env = MujocoSortingEnv(config)
+    import mujoco.viewer
+
+    mujoco.viewer.launch(env.model, env.data)
+
+
 def _inspect_detections(
     detections: list[DetectedObject],
     api_client: ExternalInspectionApiClient | None,

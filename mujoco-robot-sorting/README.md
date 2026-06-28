@@ -1,27 +1,26 @@
 # MuJoCo Robot Sorting
 
-MuJoCo 기반 로봇 팔이 테이블 위 물체를 외부 검사 모듈 결과에 따라 정상 bin 또는 불량 bin으로 분류하는 headless 시뮬레이션입니다. 로컬과 Docker 모두 `uv`로 실행하도록 구성했습니다.
+MuJoCo 기반 로봇 팔이 RGB-D 카메라 입력을 사용해 테이블 위 물체를 검사하고, 3D pose와 grasp pose를 생성한 뒤 정상 bin 또는 불량 bin으로 분류하는 시뮬레이션입니다. 로컬과 Docker 모두 `uv` 기반으로 실행합니다.
 
-## 과제 요구사항 매핑
+## 요구사항 매핑
 
-| 과제 요구사항 | 구현 내용 |
+| 요구사항 | 구현 내용 |
 |---|---|
-| 작업 시나리오 구현 | 정상/불량 물체 검사 및 분류 |
-| 로봇 목표 위치 이동 | pick/place 위치로 end-effector 이동 |
-| end-effector 작업 수행 | suction-style logical attachment 기반 pick-and-place |
-| MuJoCo 환경 | XML scene builder + `MujocoSortingEnv` simulation loop |
-| 외부 모듈 연동 | FastAPI inspection service + OpenCV vision module + task planner |
-| 0.5초 명령 생성 SLA | inspection result에서 command queue까지 latency 측정 |
-| 안전 검증 | workspace, base exclusion, self-collision risk 테스트 |
-| 테스트 | unit/integration/safety/latency tests |
-| Docker | Dockerfile + docker-compose |
-| uv | `pyproject.toml` + `uv.lock` |
+| MuJoCo 로봇 팔 시뮬레이션 | deterministic XML scene, robot arm, table, bins, objects |
+| 외부 검사 모듈 | 독립 FastAPI `inspection-api` 서비스 |
+| RGB 이미지 업로드 | `POST /inspect-image` multipart upload |
+| RGB-D 업로드 | `POST /inspect-rgbd` multipart RGB + `.npy` depth upload |
+| 3D perception | camera calibration, depth processor, point cloud, pose estimator |
+| grasp planning | top-down grasp pose generator |
+| collision-aware planning | waypoint trajectory planner + base cylinder collision checker |
+| 0.5초 SLA | inspection response 이후 task/trajectory/command queue latency 측정 |
+| Docker 통신 | `inspection-api`와 `sim`이 bridge network로 HTTP 통신 |
+| 테스트 | unit, API, integration, safety, latency tests |
 
 ## 로컬 실행
 
-PowerShell:
-
 ```powershell
+cd C:\Users\SAMSUNG\Desktop\telepix\Telepix_Robotics\mujoco-robot-sorting
 uv sync --dev
 uv run pytest -q
 uv run ruff check .
@@ -29,79 +28,92 @@ uv run mypy src
 uv run robot-sort run --headless --objects 5 --seed 42 --output outputs/run
 ```
 
-외부 검사 API를 로컬에서 별도 프로세스로 실행하려면:
+외부 FastAPI 서버를 로컬에서 따로 띄워서 HTTP 통신까지 확인하려면:
 
 ```powershell
 uv run uvicorn robot_sorting.api:app --host 0.0.0.0 --port 8000
-uv run robot-sort run --headless --objects 5 --seed 42 --output outputs/run --inspection-api-url http://localhost:8000
-```
-
-Make:
-
-```bash
-make sync
-make test
-make lint
-make typecheck
-make run
+uv run robot-sort run --headless --objects 5 --seed 42 --output outputs/run-api --inspection-api-url http://localhost:8000
 ```
 
 ## Docker 실행
 
 ```powershell
-docker compose up --build sim
+docker compose build
 docker compose run --rm test
 docker compose run --rm lint
 docker compose run --rm typecheck
+docker compose run --rm sim
 ```
 
-Compose 실행 시 `inspection-api`와 `sim`은 `robot-sorting-net` bridge network에 함께 연결됩니다. `sim` 컨테이너는 `INSPECTION_API_URL=http://inspection-api:8000` 환경 변수로 외부 검사 API를 호출합니다.
+Compose 구성:
+
+```text
+inspection-api  FastAPI 서버, 8000 포트 노출
+sim             MuJoCo 시뮬레이션, INSPECTION_API_URL=http://inspection-api:8000
+test            전체 pytest 실행, 같은 bridge network에서 API 통신 테스트
+lint            ruff
+typecheck       mypy
+```
+
+모든 서비스는 `robot-sorting-net` bridge network에 연결됩니다.
 
 ## 아키텍처
 
 ```text
-CLI
+MuJoCo RGB-D Renderer
  ↓
-SimulationConfig
+FastAPI /inspect-rgbd
  ↓
-SceneBuilder → MujocoSortingEnv → Renderer
+3D Object Pose + Grasp Pose
  ↓
-FastAPI Inspection API → VisionModule → InspectionModule → TaskPlanner
+Task Planner
  ↓
-CommandQueue → RobotController
+Trajectory Planner + Collision Checker
  ↓
-ResultLogger
+Robot Command Queue
+ ↓
+Robot Controller
+ ↓
+Result Logger
 ```
 
-## 모듈 설명
+Fallback 순서:
 
-`simulation/scene_builder.py`는 테이블, 단순 로봇 팔, 정상/불량 물체, bin, top-down camera를 포함한 MuJoCo XML을 결정적으로 생성합니다.
+```text
+1. /inspect-rgbd
+2. /inspect-image
+3. MuJoCo ground-truth object poses
+```
 
-`simulation/mujoco_env.py`는 MuJoCo `model`과 `data`를 보관하고 step, named lookup, end-effector 위치, object 위치, fallback detection을 제공합니다. headless 모드에서는 viewer를 열지 않습니다.
+렌더링 환경에서 depth 품질이 불안정하면 다음 메시지와 함께 deterministic RGB-D fallback을 사용합니다.
 
-`simulation/renderer.py`는 top-down camera RGB 이미지를 렌더링합니다. OpenGL/OSMesa가 없으면 `Renderer unavailable. Falling back to simulation ground-truth object positions.` 메시지와 함께 안전하게 fallback합니다.
+```text
+Depth rendering unavailable. Falling back to MuJoCo ground-truth object poses.
+```
 
-`api.py`는 FastAPI로 색상 분류와 불량품 검사를 HTTP endpoint로 노출합니다. Docker Compose에서는 별도 `inspection-api` 컨테이너로 실행됩니다.
+## MuJoCo Viewer 테스트 방법
 
-`modules/inspection_client.py`는 simulation 쪽에서 FastAPI 외부 검사 서비스를 호출하는 HTTP client입니다.
+Viewer는 GUI가 필요하므로 Docker/headless 환경이 아니라 로컬 데스크톱에서 실행하세요.
 
-`modules/vision_module.py`는 RGB 이미지에서 OpenCV HSV thresholding으로 파란색 정상 물체와 빨간색 불량 물체를 검출합니다. robot controller에는 의존하지 않습니다.
+```powershell
+uv run robot-sort view --objects 5 --seed 42
+```
 
-`modules/inspection_module.py`는 vision 결과를 외부 검사 결과로 변환합니다. 현재는 vision label을 사용하지만, 추후 rule 또는 ML classifier로 교체하기 쉽도록 분리했습니다.
+viewer 창에서 확인할 것:
 
-`modules/task_planner.py`는 검사 결과를 거리순 pick-and-place task로 바꾸며, 낮은 confidence, workspace 밖 좌표, base exclusion zone 내부 좌표를 거부합니다.
+1. 테이블, 로봇 base/body, upper/forearm link, end-effector가 보이는지 확인합니다.
+2. 파란 물체는 정상, 빨간 물체는 불량입니다.
+3. 정상 bin과 불량 bin은 물체 색상 검출과 겹치지 않도록 다른 색상입니다.
+4. 카메라는 top-down 고정 카메라입니다.
+5. 실제 sorting 실행은 headless CLI로 검증합니다.
 
-`modules/command_queue.py`는 task를 robot command로 만들고 command latency를 기록합니다. 0.5초 요구사항은 실제 물리 이동 완료 시간이 아니라 검사 결과가 나온 뒤 명령이 queue에 들어가기까지의 software latency입니다.
+시뮬레이션 실행 결과를 확인하려면:
 
-`robot/kinematics.py`는 yaw + shoulder + elbow 구조의 간단한 해석 IK를 제공합니다.
-
-`robot/safety.py`는 workspace, base exclusion zone, self-collision risk 검사를 제공합니다.
-
-`robot/controller.py`는 command를 받아 접근, 하강, logical attach, bin 이동, release 순서로 실행합니다.
+```powershell
+uv run robot-sort run --headless --objects 5 --seed 42 --output outputs/run
+```
 
 ## 출력 파일
-
-시뮬레이션 실행 후 `outputs/run` 아래에 생성됩니다.
 
 ```text
 outputs/run/result_log.csv
@@ -109,30 +121,33 @@ outputs/run/detected_objects.json
 outputs/run/planned_tasks.json
 outputs/run/summary.json
 outputs/run/camera_rgb.png
+outputs/run/camera_depth.npy
 ```
 
-`result_log.csv`에는 failure reason, command latency, self-collision/workspace check 결과가 포함됩니다. `summary.json`에는 전체 물체 수, 정상/불량 수, 성공률, 평균/최대 latency, 안전 실패 수가 포함됩니다.
+`result_log.csv`에는 object pose, grasp pose, trajectory safety, collision check, workspace check, command latency가 포함됩니다.
 
-## 알려진 가정
+`summary.json`에는 다음 3D 지표가 포함됩니다.
 
-그리퍼는 안정적인 테스트를 위해 suction-style logical attachment로 구현했습니다. end-effector가 물체에 충분히 가까우면 물체를 논리적으로 attach하고, release 시 bin 위치로 pose를 갱신합니다.
+```json
+{
+  "rgbd_used": true,
+  "depth_fallback_used": false,
+  "ground_truth_fallback_used": false,
+  "pose_estimation_success_count": 0,
+  "grasp_generation_success_count": 0,
+  "trajectory_collision_failures": 0
+}
+```
 
-Vision은 딥러닝 대신 색상 thresholding을 사용합니다. 과제 목적상 결정성과 테스트 가능성을 우선했습니다.
+## 주요 가정
 
-Pixel-to-world 변환은 top-down camera calibration이 workspace bounds와 선형으로 대응된다는 근사입니다.
+그리퍼는 안정적인 테스트를 위해 suction-style logical attachment로 구현했습니다.
 
-Headless rendering은 OpenGL/OSMesa 환경에 따라 실패할 수 있습니다. 이 경우 MuJoCo ground-truth object positions를 fallback detection으로 사용합니다.
+Vision은 딥러닝 대신 OpenCV color thresholding을 사용합니다. 과제의 결정성과 테스트 가능성을 우선했습니다.
 
-Docker Compose에서는 FastAPI 외부 검사 서비스와 simulation을 별도 컨테이너로 분리하고, user-defined bridge network를 통해 HTTP 통신합니다.
+Pixel-depth-to-world 변환은 pinhole camera model과 top-down workspace calibration을 사용합니다.
 
-Axis movement 테스트는 단순화된 로봇 팔의 작은 결합 오차를 고려해 `0.03m` tolerance를 사용합니다.
+MuJoCo depth rendering은 실행 환경의 OpenGL/OSMesa 상태에 따라 달라질 수 있어 deterministic fallback을 제공합니다.
 
-0.5초 요구사항은 command generation latency입니다. 실제 simulated arm movement completion time이 아닙니다.
+0.5초 SLA는 inspection response 이후 task, trajectory, command queue까지의 software latency입니다. 실제 로봇 팔 이동 완료 시간은 포함하지 않습니다.
 
-## Troubleshooting
-
-렌더링이 실패하면 Docker에서 `MUJOCO_GL=osmesa`가 설정되어 있는지 확인하세요. 로컬 Windows/Anaconda 환경에서도 프로젝트 실행은 conda가 아니라 `uv run ...`을 사용합니다.
-
-`uv sync --dev`가 Python 3.12를 찾지 못하면 uv managed Python 설치가 필요할 수 있습니다.
-
-Docker base image `ghcr.io/astral-sh/uv:python3.12-bookworm-slim`을 받을 수 없는 환경에서는 Astral uv의 동일 Python 3.12 계열 slim 이미지를 사용해도 됩니다.

@@ -1,11 +1,15 @@
 services:
   inspection-api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.inspection
     environment:
       PYTHONUNBUFFERED: "1"
+    ports:
+      - "8000:8000"
     command: uv run uvicorn robot_sorting.api:app --host 0.0.0.0 --port 8000
     healthcheck:
-      test: ["CMD", "uv", "run", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -13,7 +17,9 @@ services:
       - robot-sorting-net
 
   sim:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
     environment:
       MUJOCO_GL: osmesa
       PYTHONUNBUFFERED: "1"
@@ -33,22 +39,32 @@ services:
       --output outputs/run
 
   test:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
     environment:
       MUJOCO_GL: osmesa
       PYTHONUNBUFFERED: "1"
+      INSPECTION_API_URL: http://inspection-api:8000
+    depends_on:
+      inspection-api:
+        condition: service_healthy
     command: uv run pytest -q
     networks:
       - robot-sorting-net
 
   lint:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
     command: uv run ruff check .
     networks:
       - robot-sorting-net
 
   typecheck:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
     command: uv run mypy src
     networks:
       - robot-sorting-net
