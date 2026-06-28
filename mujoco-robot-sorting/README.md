@@ -99,13 +99,31 @@ Viewer는 GUI가 필요하므로 Docker/headless 환경이 아니라 로컬 데�
 uv run robot-sort view --objects 5 --seed 42
 ```
 
+위 명령은 기본적으로 deterministic RGB-D perception, grasp planning, collision-aware trajectory를 만든 뒤 MuJoCo viewer에서 로봇 팔 이동을 재생합니다. 더 천천히 보고 싶으면 delay를 키웁니다.
+
+```powershell
+uv run robot-sort view --objects 5 --seed 42 --animate --delay 0.05
+```
+
+정적 장면만 확인하려면:
+
+```powershell
+uv run robot-sort view --objects 5 --seed 42 --static
+```
+
+전체 pipeline 출력 파일까지 만들면서 viewer에서 움직임을 보려면:
+
+```powershell
+uv run robot-sort run --viewer --objects 5 --seed 42 --output outputs/run-viewer
+```
+
 viewer 창에서 확인할 것:
 
-1. 테이블, 로봇 base/body, upper/forearm link, end-effector가 보이는지 확인합니다.
+1. 테이블, 로봇 base/body, shoulder/elbow/wrist joint, two-finger gripper가 보이는지 확인합니다.
 2. 파란 물체는 정상, 빨간 물체는 불량입니다.
 3. 정상 bin과 불량 bin은 물체 색상 검출과 겹치지 않도록 다른 색상입니다.
 4. 카메라는 top-down 고정 카메라입니다.
-5. 실제 sorting 실행은 headless CLI로 검증합니다.
+5. 애니메이션이 끝나면 viewer 창을 닫아 CLI를 종료합니다.
 
 시뮬레이션 실행 결과를 확인하려면:
 
@@ -150,4 +168,3 @@ Pixel-depth-to-world 변환은 pinhole camera model과 top-down workspace calibr
 MuJoCo depth rendering은 실행 환경의 OpenGL/OSMesa 상태에 따라 달라질 수 있어 deterministic fallback을 제공합니다.
 
 0.5초 SLA는 inspection response 이후 task, trajectory, command queue까지의 software latency입니다. 실제 로봇 팔 이동 완료 시간은 포함하지 않습니다.
-

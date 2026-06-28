@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Protocol
 
 import numpy as np
 import typer
@@ -37,7 +37,9 @@ from robot_sorting.schemas import (
     PlannedTrajectory,
     RGBDFrame,
     RGBDInspectionObject,
+    RobotCommand,
     SimulationConfig,
+    TaskExecutionResult,
 )
 from robot_sorting.simulation.mujoco_env import MujocoSortingEnv
 from robot_sorting.simulation.renderer import MujocoRenderer
@@ -45,6 +47,17 @@ from robot_sorting.simulation.renderer import MujocoRenderer
 app = typer.Typer(help="MuJoCo robot arm sorting simulation")
 console = Console()
 DEFAULT_OUTPUT_DIR = Path("outputs/run")
+DEFAULT_VIEWER_DELAY_SECONDS = 0.03
+
+
+class ViewerHandle(Protocol):
+    """Minimal MuJoCo passive viewer contract used by CLI playback."""
+
+    def sync(self) -> None:
+        """Synchronize the viewer with current MuJoCo model/data state."""
+
+    def is_running(self) -> bool:
+        """Return whether the viewer window is still open."""
 
 
 @app.callback()
@@ -71,6 +84,10 @@ def run(
             help="FastAPI external inspection service URL. Defaults to INSPECTION_API_URL.",
         ),
     ] = None,
+    viewer_delay: Annotated[
+        float,
+        typer.Option("--viewer-delay", min=0.0, help="Frame delay in seconds when --viewer is used."),
+    ] = DEFAULT_VIEWER_DELAY_SECONDS,
 ) -> None:
     """Run the full external-inspection sorting pipeline."""
 
@@ -148,8 +165,12 @@ def run(
     )
     command_queue = RobotCommandQueue()
     command_queue.extend(commands)
-    controller = RobotController(env, config)
-    results = controller.execute_commands(command_queue.pop_all())
+    queued_commands = command_queue.pop_all()
+    if config.headless:
+        controller = RobotController(env, config)
+        results = controller.execute_commands(queued_commands)
+    else:
+        results = _play_viewer_commands(env, config, queued_commands, viewer_delay)
 
     logger = ResultLogger(config.output_dir)
     summary = logger.write_all(
@@ -172,14 +193,93 @@ def run(
 def view(
     objects: Annotated[int, typer.Option("--objects", min=0, help="Number of objects to display.")] = 5,
     seed: Annotated[int, typer.Option("--seed", help="Deterministic scene seed.")] = 42,
+    animate: Annotated[
+        bool,
+        typer.Option("--animate/--static", help="Play the sorting trajectory instead of opening a static viewer."),
+    ] = True,
+    delay: Annotated[
+        float,
+        typer.Option("--delay", min=0.0, help="Frame delay in seconds during viewer playback."),
+    ] = DEFAULT_VIEWER_DELAY_SECONDS,
 ) -> None:
     """Open the MuJoCo viewer for local visual inspection."""
 
     config = create_simulation_config(headless=False, objects=objects, seed=seed)
     env = MujocoSortingEnv(config)
+
+    if not animate:
+        _launch_static_viewer(env)
+        return
+
+    commands = _build_viewer_demo_commands(env, config)
+    if not commands:
+        console.print("No sorting commands were generated. Opening the scene for static inspection.")
+        _launch_static_viewer(env)
+        return
+    _play_viewer_commands(env, config, commands, delay)
+
+
+def _launch_static_viewer(env: MujocoSortingEnv) -> None:
     import mujoco.viewer
 
     mujoco.viewer.launch(env.model, env.data)
+
+
+def _build_viewer_demo_commands(env: MujocoSortingEnv, config: SimulationConfig) -> list[RobotCommand]:
+    frame = MujocoRenderer(env).render_ground_truth_rgbd()
+    calibration = build_top_down_workspace_calibration(config.width, config.height, config.workspace)
+    rgbd_objects = _inspect_rgbd(frame, calibration, config, api_client=None)
+    if not rgbd_objects:
+        return []
+
+    _, inspections = _detections_from_rgbd_objects(rgbd_objects, env)
+    tasks = TaskPlanner(config).plan(inspections)
+    return create_robot_commands(
+        tasks,
+        trajectories=_plan_trajectories(tasks, _grasp_pose_map(rgbd_objects), config),
+        object_poses=_object_pose_map(rgbd_objects),
+        grasp_poses=_grasp_pose_map(rgbd_objects),
+    )
+
+
+def _play_viewer_commands(
+    env: MujocoSortingEnv,
+    config: SimulationConfig,
+    commands: list[RobotCommand],
+    frame_delay: float,
+) -> list[TaskExecutionResult]:
+    import mujoco.viewer
+
+    results: list[TaskExecutionResult] = []
+    viewer_context = mujoco.viewer.launch_passive(env.model, env.data)
+    with viewer_context as viewer_handle:
+        viewer: ViewerHandle = viewer_handle
+
+        def sync_motion_step(_position: tuple[float, float, float]) -> None:
+            if not _viewer_is_running(viewer):
+                return
+            viewer.sync()
+            if frame_delay > 0:
+                time.sleep(frame_delay)
+
+        controller = RobotController(env, config, step_callback=sync_motion_step)
+        viewer.sync()
+        console.print("Viewer playback started. Close the MuJoCo viewer window to exit after playback.")
+        for command in commands:
+            if not _viewer_is_running(viewer):
+                break
+            result = controller.execute_command(command)
+            results.append(result)
+            console.print(f"{command.object_id}: {result.status}")
+        viewer.sync()
+        while _viewer_is_running(viewer):
+            viewer.sync()
+            time.sleep(max(frame_delay, 0.05))
+    return results
+
+
+def _viewer_is_running(viewer: ViewerHandle) -> bool:
+    return viewer.is_running()
 
 
 def _inspect_detections(

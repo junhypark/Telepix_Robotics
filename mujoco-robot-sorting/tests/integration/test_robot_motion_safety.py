@@ -47,6 +47,17 @@ def test_move_to_basic_pick_and_place_positions(two_object_config: SimulationCon
         assert is_inside_workspace(final_pos, two_object_config.workspace)
 
 
+def test_motion_step_callback_receives_viewer_sync_positions(two_object_config: SimulationConfig) -> None:
+    env = MujocoSortingEnv(two_object_config)
+    synced_positions: list[tuple[float, float, float]] = []
+    controller = RobotController(env, two_object_config, step_callback=synced_positions.append)
+
+    final_pos = controller.move_end_effector_to((0.22, 0.12, 0.15))
+
+    assert synced_positions
+    assert synced_positions[-1] == pytest.approx(final_pos)
+
+
 def test_execute_full_and_multiple_pick_place_tasks(two_object_config: SimulationConfig) -> None:
     env = MujocoSortingEnv(two_object_config)
     controller = RobotController(env, two_object_config)
@@ -78,4 +89,3 @@ def test_unsafe_base_target_is_rejected(two_object_config: SimulationConfig) -> 
 
     assert result.status == "failed"
     assert result.failure_reason == "self_collision_risk"
-

@@ -7,7 +7,9 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from robot_sorting.cli import app
+from robot_sorting.cli import _build_viewer_demo_commands, app
+from robot_sorting.schemas import SimulationConfig
+from robot_sorting.simulation.mujoco_env import MujocoSortingEnv
 
 pytestmark = pytest.mark.integration
 
@@ -47,3 +49,11 @@ def test_cli_run_creates_required_output_files(tmp_path) -> None:
         assert key in summary
     assert summary["max_command_latency_seconds"] <= 0.5
 
+
+def test_viewer_demo_commands_include_planned_trajectories(two_object_config: SimulationConfig) -> None:
+    env = MujocoSortingEnv(two_object_config)
+
+    commands = _build_viewer_demo_commands(env, two_object_config)
+
+    assert len(commands) == two_object_config.objects
+    assert all(command.trajectory is not None for command in commands)

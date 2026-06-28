@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections.abc import Callable
 
 from robot_sorting.robot.kinematics import solve_ik
 from robot_sorting.robot.safety import (
@@ -17,6 +18,7 @@ from robot_sorting.schemas import RobotCommand, SimulationConfig, TaskExecutionR
 from robot_sorting.simulation.mujoco_env import MujocoSortingEnv
 
 LOGGER = logging.getLogger(__name__)
+MotionStepCallback = Callable[[tuple[float, float, float]], None]
 
 
 class UnsafeMotionError(RuntimeError):
@@ -30,9 +32,15 @@ class UnsafeMotionError(RuntimeError):
 class RobotController:
     """Execute RobotCommand objects against a MuJoCoSortingEnv."""
 
-    def __init__(self, env: MujocoSortingEnv, config: SimulationConfig) -> None:
+    def __init__(
+        self,
+        env: MujocoSortingEnv,
+        config: SimulationConfig,
+        step_callback: MotionStepCallback | None = None,
+    ) -> None:
         self.env = env
         self.config = config
+        self.step_callback = step_callback
         self.step_logs: list[dict[str, float | str]] = []
 
     def move_end_effector_to(self, target: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -57,6 +65,8 @@ class RobotController:
             if ik_result.status == "invalid":
                 raise UnsafeMotionError("ik_invalid")
             self.env.set_arm_joint_angles(ik_result.angles)
+            if self.step_callback is not None:
+                self.step_callback(self.env.get_end_effector_position())
         final_pos = self.env.get_end_effector_position()
         ik_status = ik_result.status if ik_result is not None else "invalid"
         self.step_logs.append(
