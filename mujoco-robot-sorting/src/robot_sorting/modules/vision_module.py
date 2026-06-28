@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -13,6 +14,14 @@ from robot_sorting.schemas import DetectedObject, ObjectLabel, SimulationConfig,
 LOGGER = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class MaskedDetection:
+    """Vision detection paired with its binary segmentation mask."""
+
+    detected_object: DetectedObject
+    mask: np.ndarray
+
+
 class VisionModule:
     """Detect red defect objects and blue normal objects from RGB images."""
 
@@ -21,6 +30,11 @@ class VisionModule:
 
     def detect(self, rgb_image: np.ndarray) -> list[DetectedObject]:
         """Detect colored objects in an RGB image without depending on robot control."""
+
+        return [item.detected_object for item in self.detect_with_masks(rgb_image)]
+
+    def detect_with_masks(self, rgb_image: np.ndarray) -> list[MaskedDetection]:
+        """Detect colored objects and return one mask per detected contour."""
 
         if rgb_image.ndim != 3 or rgb_image.shape[2] != 3:
             LOGGER.warning("Vision input is not an RGB image")
@@ -33,7 +47,14 @@ class VisionModule:
             *self._detections_from_mask(blue_mask, "normal", rgb_image.shape),
             *self._detections_from_mask(red_mask, "defect", rgb_image.shape),
         ]
-        return sorted(detections, key=lambda item: (item.world_position[0], item.world_position[1], item.label))
+        return sorted(
+            detections,
+            key=lambda item: (
+                item.detected_object.world_position[0],
+                item.detected_object.world_position[1],
+                item.detected_object.label,
+            ),
+        )
 
     def pixel_to_world(
         self,
@@ -85,9 +106,9 @@ class VisionModule:
         mask: np.ndarray,
         label: ObjectLabel,
         image_shape: tuple[int, ...],
-    ) -> list[DetectedObject]:
+    ) -> list[MaskedDetection]:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        detections: list[DetectedObject] = []
+        detections: list[MaskedDetection] = []
         sorted_contours = sorted(contours, key=self._contour_sort_key)
         for index, contour in enumerate(sorted_contours):
             area = float(cv2.contourArea(contour))
@@ -104,13 +125,18 @@ class VisionModule:
             confidence = self._confidence(area, contour)
             if confidence < self.config.min_confidence:
                 LOGGER.debug("Detected low-confidence %s candidate at %s", label, center)
+            contour_mask = np.zeros(mask.shape, dtype=np.uint8)
+            cv2.drawContours(contour_mask, [contour], contourIdx=-1, color=255, thickness=-1)
             detections.append(
-                DetectedObject(
-                    object_id=f"{label}_{index}",
-                    label=label,
-                    pixel_center=center,
-                    world_position=world,
-                    confidence=confidence,
+                MaskedDetection(
+                    detected_object=DetectedObject(
+                        object_id=f"{label}_{index}",
+                        label=label,
+                        pixel_center=center,
+                        world_position=world,
+                        confidence=confidence,
+                    ),
+                    mask=contour_mask,
                 )
             )
         return detections

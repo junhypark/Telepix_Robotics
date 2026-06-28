@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 ObjectLabel = Literal["normal", "defect"]
@@ -15,7 +16,7 @@ ExecutionStatus = Literal["completed", "failed"]
 class StrictBaseModel(BaseModel):
     """Base model with production-friendly validation defaults."""
 
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, arbitrary_types_allowed=True)
 
 
 class WorkspaceBounds(StrictBaseModel):
@@ -110,6 +111,7 @@ class RobotCommand(StrictBaseModel):
     command_type: Literal["pick_and_place"] = "pick_and_place"
     inspection_at: float | None = None
     command_latency_seconds: float = Field(default=0.0, ge=0.0)
+    trajectory: PlannedTrajectory | None = None
 
 
 class JointAngles(StrictBaseModel):
@@ -141,6 +143,10 @@ class TaskExecutionResult(StrictBaseModel):
     command_latency_seconds: float = Field(default=0.0, ge=0.0)
     self_collision_checked: bool = False
     workspace_checked: bool = False
+    object_pose: ObjectPose3D | None = None
+    grasp_pose: GraspPose | None = None
+    trajectory_safe: bool | None = None
+    collision_checked: bool = False
 
 
 class RunSummary(StrictBaseModel):
@@ -157,6 +163,14 @@ class RunSummary(StrictBaseModel):
     self_collision_failures: int = 0
     workspace_failures: int = 0
     vision_low_confidence_count: int = 0
+    rgbd_used: bool = False
+    depth_fallback_used: bool = False
+    ground_truth_fallback_used: bool = False
+    pose_estimation_success_count: int = 0
+    pose_estimation_failure_count: int = 0
+    grasp_generation_success_count: int = 0
+    grasp_generation_failure_count: int = 0
+    trajectory_collision_failures: int = 0
 
 
 class ImageInspectionRequest(StrictBaseModel):
@@ -178,3 +192,126 @@ class InspectionPipelineResponse(StrictBaseModel):
     detected_objects: list[DetectedObject]
     inspection_results: list[ExternalInspectionResult]
 
+
+class RGBDFrame(StrictBaseModel):
+    """RGB-D frame captured from a MuJoCo camera."""
+
+    rgb: np.ndarray
+    depth: np.ndarray
+    width: int
+    height: int
+    camera_name: str
+    captured_at: float
+
+
+class CameraIntrinsics(StrictBaseModel):
+    """Pinhole camera intrinsic parameters."""
+
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    width: int
+    height: int
+
+
+class CameraExtrinsics(StrictBaseModel):
+    """Camera-to-world transform."""
+
+    rotation_world_from_camera: list[list[float]]
+    translation_world_from_camera: tuple[float, float, float]
+
+
+class CameraCalibration(StrictBaseModel):
+    """Full camera calibration for pixel-depth projection."""
+
+    intrinsics: CameraIntrinsics
+    extrinsics: CameraExtrinsics
+
+
+class ObjectPose3D(StrictBaseModel):
+    """Estimated 3D object pose and size."""
+
+    object_id: str
+    label: ObjectLabel
+    position: tuple[float, float, float]
+    orientation_rpy: tuple[float, float, float]
+    size_xyz: tuple[float, float, float]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class GraspPose(StrictBaseModel):
+    """Top-down grasp pose for a table-top object."""
+
+    object_id: str
+    pre_grasp_position: tuple[float, float, float]
+    grasp_position: tuple[float, float, float]
+    retreat_position: tuple[float, float, float]
+    approach_vector: tuple[float, float, float]
+    gripper_yaw: float
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class TrajectoryWaypoint(StrictBaseModel):
+    """One collision-checked trajectory waypoint."""
+
+    position: tuple[float, float, float]
+    gripper_state: Literal["open", "closed"]
+    duration_seconds: float = Field(gt=0.0)
+
+
+class PlannedTrajectory(StrictBaseModel):
+    """Collision-aware pick-and-place waypoint sequence."""
+
+    object_id: str
+    waypoints: list[TrajectoryWaypoint]
+    is_safe: bool
+    failure_reason: str | None = None
+
+
+class RGBDInspectionObject(StrictBaseModel):
+    """Object returned by the RGB-D inspection endpoint."""
+
+    object_id: str
+    label: ObjectLabel
+    position: tuple[float, float, float]
+    orientation_rpy: tuple[float, float, float]
+    size_xyz: tuple[float, float, float]
+    confidence: float = Field(ge=0.0, le=1.0)
+    grasp_pose: GraspPose
+
+
+class RGBDInspectionResponse(StrictBaseModel):
+    """Response for advanced RGB-D inspection."""
+
+    objects: list[RGBDInspectionObject]
+    processing_time_seconds: float = Field(ge=0.0)
+
+
+class ImageUploadInspectionObject(StrictBaseModel):
+    """Object returned by the multipart image inspection endpoint."""
+
+    object_id: str
+    label: ObjectLabel
+    pixel_center: tuple[int, int]
+    world_position: tuple[float, float, float]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ImageUploadInspectionResponse(StrictBaseModel):
+    """Response for multipart RGB image inspection."""
+
+    objects: list[ImageUploadInspectionObject]
+    processing_time_seconds: float = Field(ge=0.0)
+
+
+class InspectionFallbackResult(StrictBaseModel):
+    """Simulation-side inspection result with fallback metadata."""
+
+    detected_objects: list[DetectedObject]
+    inspection_results: list[ExternalInspectionResult]
+    rgbd_objects: list[RGBDInspectionObject] = Field(default_factory=list)
+    used_rgbd: bool = False
+    used_image_fallback: bool = False
+    used_ground_truth_fallback: bool = False
+    depth_fallback_used: bool = False
