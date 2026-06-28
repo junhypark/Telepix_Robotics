@@ -281,6 +281,10 @@ def run_scenarios(
 def view(
     objects: Annotated[int, typer.Option("--objects", min=0, help="Number of objects to display.")] = 5,
     seed: Annotated[int, typer.Option("--seed", help="Deterministic scene seed.")] = 42,
+    scenario: Annotated[
+        str | None,
+        typer.Option("--scenario", help="Named production scenario id. Use list-scenarios to inspect options."),
+    ] = None,
     animate: Annotated[
         bool,
         typer.Option("--animate/--static", help="Play the sorting trajectory instead of opening a static viewer."),
@@ -292,7 +296,13 @@ def view(
 ) -> None:
     """Open the MuJoCo viewer for local visual inspection."""
 
-    config = create_simulation_config(headless=False, objects=objects, seed=seed)
+    if scenario is None:
+        config = create_simulation_config(headless=False, objects=objects, seed=seed)
+    else:
+        try:
+            config = create_config_for_scenario(scenario, headless=False, save_images=False)
+        except KeyError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--scenario") from exc
     env = MujocoSortingEnv(config)
 
     if not animate:

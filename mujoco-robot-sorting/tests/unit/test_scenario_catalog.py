@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from robot_sorting.cli import _build_viewer_demo_commands
 from robot_sorting.scenarios import SCENARIOS, create_config_for_scenario, get_scenario, scenario_ids
 from robot_sorting.simulation.mujoco_env import MujocoSortingEnv
 
@@ -43,3 +44,14 @@ def test_each_scenario_scene_loads() -> None:
 
         assert len(env.object_specs) == config.objects
         assert len(env.bin_specs) == 2
+
+
+def test_viewer_demo_commands_follow_scenario_config() -> None:
+    config = create_config_for_scenario("small_batch_single_defect", headless=False, save_images=False)
+    env = MujocoSortingEnv(config)
+
+    commands = _build_viewer_demo_commands(env, config)
+
+    assert len(commands) == config.objects
+    assert {command.task.target_bin for command in commands} == {"normal_bin", "defect_bin"}
+    assert all(command.trajectory is not None for command in commands)
