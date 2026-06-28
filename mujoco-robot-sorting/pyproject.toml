@@ -42,6 +42,7 @@ markers = [
     "integration: MuJoCo integration tests",
     "safety: robot safety and workspace tests",
     "latency: command latency tests",
+    "api: FastAPI inspection API tests",
     "rendering: tests that require camera rendering or OpenGL/OSMesa",
 ]
 
