@@ -1,0 +1,59 @@
+[
+  {
+    "object_id": "normal_1",
+    "label": "normal",
+    "pick_position": [
+      0.21181749424338345,
+      0.13509999632835387,
+      0.0425000262260437
+    ],
+    "place_position": [
+      -0.2399039652774675,
+      0.13783780397291226,
+      0.04
+    ],
+    "target_bin": "normal_bin",
+    "target_bin_id": "normal_bin",
+    "placement_strategy": "grid_free_slot",
+    "placement_confidence": 0.9966846306023603,
+    "inspection_at": 25384.496673
+  },
+  {
+    "object_id": "defect_1",
+    "label": "defect",
+    "pick_position": [
+      0.308106397876516,
+      0.13509999632835387,
+      0.0425000262260437
+    ],
+    "place_position": [
+      0.1852760034236278,
+      -0.1511601083444155,
+      0.04
+    ],
+    "target_bin": "defect_bin",
+    "target_bin_id": "defect_bin",
+    "placement_strategy": "grid_free_slot",
+    "placement_confidence": 0.9966846306023603,
+    "inspection_at": 25384.496673
+  },
+  {
+    "object_id": "normal_2",
+    "label": "normal",
+    "pick_position": [
+      0.4043953015096486,
+      0.13509999632835387,
+      0.0425000262260437
+    ],
+    "place_position": [
+      -0.2699039652774675,
+      0.19783780397291226,
+      0.04
+    ],
+    "target_bin": "normal_bin",
+    "target_bin_id": "normal_bin",
+    "placement_strategy": "grid_free_slot",
+    "placement_confidence": 0.9966846306023603,
+    "inspection_at": 25384.496673
+  }
+]

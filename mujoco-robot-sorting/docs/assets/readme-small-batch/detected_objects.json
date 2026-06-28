@@ -1,0 +1,44 @@
+[
+  {
+    "object_id": "normal_1",
+    "label": "normal",
+    "pixel_center": [
+      411,
+      159
+    ],
+    "world_position": [
+      0.21181749424338345,
+      0.13509999632835387,
+      0.0425000262260437
+    ],
+    "confidence": 0.9829867674858224
+  },
+  {
+    "object_id": "defect_1",
+    "label": "defect",
+    "pixel_center": [
+      470,
+      159
+    ],
+    "world_position": [
+      0.308106397876516,
+      0.13509999632835387,
+      0.0425000262260437
+    ],
+    "confidence": 0.9829867674858224
+  },
+  {
+    "object_id": "normal_2",
+    "label": "normal",
+    "pixel_center": [
+      530,
+      159
+    ],
+    "world_position": [
+      0.4043953015096486,
+      0.13509999632835387,
+      0.0425000262260437
+    ],
+    "confidence": 0.9829867674858224
+  }
+]
